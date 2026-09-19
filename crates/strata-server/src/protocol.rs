@@ -14,7 +14,7 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use strata_core::{Partition, PropertyDef, Query, TypeDef, Uuid, Values};
+use strata_core::{Partition, PropertyDef, Query, TypeDef, TypeExport, Uuid, Values};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -103,6 +103,12 @@ pub enum Request {
     },
     Seed,
     SeedNeedsVault,
+    ExportType {
+        type_name: String,
+    },
+    Import {
+        types: Vec<TypeExport>,
+    },
 }
 
 /// The answer to [`Request::Info`].

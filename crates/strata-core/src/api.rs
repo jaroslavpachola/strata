@@ -10,6 +10,7 @@ use crate::model::{Entry, Item, Partition, PropertyDef, TypeDef, Values, VaultSt
 use crate::query::Query;
 use crate::seed::Seeded;
 use crate::store::{Relation, Store};
+use crate::transfer::{Imported, TypeExport};
 
 /// Everything a front end does with a store. [`Store`] is the files;
 /// strata-server's client is the same operations over its socket.
@@ -50,6 +51,9 @@ pub trait Api {
 
     fn seed(&self) -> Result<Seeded>;
     fn seed_needs_vault(&self) -> Result<bool>;
+
+    fn export_type(&self, type_name: &str) -> Result<TypeExport>;
+    fn import(&self, types: &[TypeExport]) -> Result<Imported>;
 
     fn add_item(&self, type_name: &str, values: Values, author: &str) -> Result<Item> {
         let mut items = self.add_items(type_name, vec![values], author)?;
@@ -140,5 +144,11 @@ impl Api for Store {
     }
     fn seed_needs_vault(&self) -> Result<bool> {
         Store::seed_needs_vault(self)
+    }
+    fn export_type(&self, type_name: &str) -> Result<TypeExport> {
+        Store::export_type(self, type_name)
+    }
+    fn import(&self, types: &[TypeExport]) -> Result<Imported> {
+        Store::import(self, types)
     }
 }

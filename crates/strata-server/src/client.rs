@@ -12,8 +12,8 @@ use hyper::header::{CONTENT_TYPE, HOST};
 use hyper_util::rt::TokioIo;
 use serde::de::DeserializeOwned;
 use strata_core::{
-    Api, Entry, Error, Item, Partition, PropertyDef, Query, Relation, Result, Seeded, TypeDef,
-    Uuid, Values, VaultStatus,
+    Api, Entry, Error, Imported, Item, Partition, PropertyDef, Query, Relation, Result, Seeded,
+    TypeDef, TypeExport, Uuid, Values, VaultStatus,
 };
 use tokio::net::UnixStream;
 use tokio::runtime::Runtime;
@@ -290,5 +290,15 @@ impl Api for Client {
     }
     fn seed_needs_vault(&self) -> Result<bool> {
         self.call(&Request::SeedNeedsVault)
+    }
+    fn export_type(&self, type_name: &str) -> Result<TypeExport> {
+        self.call(&Request::ExportType {
+            type_name: type_name.into(),
+        })
+    }
+    fn import(&self, types: &[TypeExport]) -> Result<Imported> {
+        self.call(&Request::Import {
+            types: types.to_vec(),
+        })
     }
 }

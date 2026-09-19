@@ -10,6 +10,7 @@
 
 mod config;
 mod output;
+mod transfer;
 
 use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
@@ -86,6 +87,19 @@ enum Command {
     /// The vault's state
     #[command(subcommand)]
     Vault(VaultCmd),
+    /// Write every open type as <Type>.md and <Type>.json, and the vault's
+    /// types (with --unlock) into vault.json.age, encrypted with the vault
+    /// passphrase [default: the SuperHub vault's References/strata]
+    Export {
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Read back what export wrote: every <Type>.json, and vault.json.age
+    /// (which needs --unlock); all of it or none
+    Import {
+        #[arg(value_name = "DIR")]
+        from: Option<PathBuf>,
+    },
     /// Print changes as strata-server sees them, one per line, until it
     /// stops: items, type, or vault, and the type concerned
     Watch {
@@ -509,6 +523,44 @@ fn command(cli: Cli, store: &mut dyn Api, config: &Config, out: &Out) -> anyhow:
                 }
             };
             out.entries(&store.query(&q)?)
+        }
+
+        Command::Export { out: to } => {
+            let dir = config.export_dir(to)?;
+            let done = transfer::export(store, &dir, config, &author()?)?;
+            out.value(&done, |_| {
+                let mut s = format!("{}", done.dir.display());
+                for (label, names) in [
+                    ("markdown and JSON", &done.open),
+                    (transfer::VAULT_ARCHIVE, &done.vault),
+                    ("skipped, vault locked", &done.skipped),
+                ] {
+                    if !names.is_empty() {
+                        s.push_str(&format!("\n{label}: {}", names.join(", ")));
+                    }
+                }
+                s
+            })
+        }
+
+        Command::Import { from } => {
+            let dir = match from {
+                Some(d) => d,
+                None => config.export_dir(None)?,
+            };
+            let done = transfer::import(store, &dir, config)?;
+            out.value(&done, |_| {
+                format!(
+                    "{} items, {} relations; declared: {}",
+                    done.items,
+                    done.relations,
+                    if done.types.is_empty() {
+                        "none".to_string()
+                    } else {
+                        done.types.join(", ")
+                    }
+                )
+            })
         }
 
         Command::Vault(cmd) => {

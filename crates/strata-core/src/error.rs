@@ -50,6 +50,10 @@ pub enum Error {
     ChoicesUnmet { property: String, count: i64 },
     #[error("every write needs an author")]
     NoAuthor,
+    #[error("type {0:?} exists with another definition and has items")]
+    TypeConflict(String),
+    #[error("item {0} already exists")]
+    ItemExists(Uuid),
     #[error("the database holds something strata did not write: {0}")]
     Corrupt(String),
     #[error(transparent)]
@@ -87,6 +91,8 @@ impl Error {
             Error::NotAChoice { .. } => "not_a_choice",
             Error::ChoicesUnmet { .. } => "choices_unmet",
             Error::NoAuthor => "no_author",
+            Error::TypeConflict(_) => "type_conflict",
+            Error::ItemExists(_) => "item_exists",
             Error::Corrupt(_) => "corrupt",
             Error::Sqlite(_) => "sqlite",
             Error::Io(_) => "io",

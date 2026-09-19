@@ -43,6 +43,7 @@ impl Env {
             // never the user's own server
             .env_remove("STRATA_SOCKET")
             .env("XDG_RUNTIME_DIR", self.dir.path())
+            .env_remove("SUPERHUB_VAULT_PATH")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -629,4 +630,92 @@ fn watch_without_a_server_says_so() {
     let env = Env::new();
     let err = env.fails(1, &["watch"], None);
     assert!(err["error"].as_str().unwrap().contains("strata-server"));
+}
+
+/// The M6 gate: export, wipe the data dir, import, and the query results
+/// match.
+#[test]
+fn export_wipe_import_gives_the_same_answers() {
+    let env = Env::new();
+    let tasks = env.ok(
+        &["item", "add", "Task"],
+        Some(json!([
+            {"title": "export | it", "status": "done", "project": "strata"},
+            {"title": "wipe\nit", "status": "todo", "due": "2026-10-01"}
+        ])),
+    );
+    let snapshot = env.ok(
+        &["-u", "item", "add", "PortfolioSnapshot"],
+        Some(json!({"taken_at": "2026-09-19T10:00:00Z", "currency": "EUR", "total": 42,
+                    "positions": [{"symbol": "SECRETSYMBOL", "quantity": 1, "price": 42, "value": 42}]})),
+    );
+    let (task, snap) = (
+        tasks[0]["id"].as_str().unwrap(),
+        snapshot["id"].as_str().unwrap(),
+    );
+    env.ok(&["-u", "item", "relate", snap, task, "funds"], None);
+    env.ok(&["item", "relate", task, snap, "about"], None);
+
+    let answers = |env: &Env| {
+        json!([
+            env.ok(&["-u", "query", "-t", "Task"], None),
+            env.ok(&["-u", "query", "-t", "PortfolioSnapshot"], None),
+            env.ok(&["-u", "item", "relations", task], None),
+            env.ok(&["type", "list"], None),
+        ])
+    };
+    let before = answers(&env);
+
+    let out = env.dir.path().join("export");
+    let out_arg = out.to_str().unwrap();
+    // locked, the vault's types stay behind
+    let locked = env.ok(&["export", "--out", out_arg], None);
+    assert_eq!(locked["skipped"], json!(["PortfolioSnapshot"]));
+    assert!(!out.join("vault.json.age").exists());
+    let done = env.ok(&["-u", "export", "--out", out_arg], None);
+    assert_eq!(done["open"], json!(["Task"]));
+    assert_eq!(done["vault"], json!(["PortfolioSnapshot"]));
+
+    // nothing of the vault in the clear, and a SuperHub note to read
+    for entry in std::fs::read_dir(&out).unwrap() {
+        let bytes = std::fs::read(entry.unwrap().path()).unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("SECRETSYMBOL"));
+    }
+    let md = std::fs::read_to_string(out.join("Task.md")).unwrap();
+    assert!(md.starts_with("---\ntitle: \"strata: Task\"\ntype: reference\n"));
+    assert!(md.contains("author: test\n"));
+    assert!(md.contains("export \\| it") && md.contains("wipe<br>it"));
+
+    // wipe, start again, bring it back
+    std::fs::remove_dir_all(env.dir.path().join("store")).unwrap();
+    env.ok(&["init"], None);
+    env.fails(2, &["import", out_arg], None);
+    let imported = env.ok(&["-u", "import", out_arg], None);
+    assert_eq!(imported["items"], 3);
+    assert_eq!(imported["relations"], 2);
+    assert_eq!(answers(&env), before);
+
+    // a second export keeps the note's created date
+    let created = |md: &str| {
+        md.lines()
+            .find(|l| l.starts_with("created:"))
+            .unwrap()
+            .to_string()
+    };
+    env.ok(&["export", "--out", out_arg], None);
+    let again = std::fs::read_to_string(out.join("Task.md")).unwrap();
+    assert_eq!(created(&again), created(&md));
+}
+
+#[test]
+fn export_goes_to_the_superhub_vault_by_default() {
+    let mut env = Env::new();
+    let vault = env.dir.path().join("superhub");
+    env.config = Some(format!("superhub_vault = \"{}\"\n", vault.display()));
+    let done = env.ok(&["export"], None);
+    assert_eq!(done["dir"], json!(vault.join("References/strata")));
+    assert!(vault.join("References/strata/Task.md").exists());
+    env.config = None;
+    let err = env.fails(1, &["export"], None);
+    assert!(err["error"].as_str().unwrap().contains("--out"));
 }

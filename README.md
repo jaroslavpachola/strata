@@ -9,7 +9,7 @@ See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
 
 ## Status
 
-**M5 (0.5).** The core library, the `strata` CLI and `strata-server`
+**M6 (0.6).** The core library, the `strata` CLI and `strata-server`
 work: types, items, relations and queries over two SQLite files,
 `open.db` in the clear and `vault.db` under SQLCipher. While the vault is
 locked its items show only as `{id, type, locked}` placeholders and every
@@ -36,6 +36,17 @@ Barbero when `~/.config/strata/config.toml` says so, else a prompt:
     barbero_entry = "strata/vault"
 
 Every write records an author: `--author`, `$STRATA_AUTHOR`, or `$USER`.
+
+### Export
+
+    strata -u export                     # SuperHub/References/strata by default, or --out DIR
+    strata -u import DIR                 # all of it or none
+
+Each open type becomes `<Type>.md` (a SuperHub note) and `<Type>.json`;
+vault types go only into `vault.json.age`, encrypted with the vault
+passphrase, and only with `-u`. To change a schema: export, edit the
+JSON, wipe, `strata init`, import. Set the SuperHub vault with
+`superhub_vault = "..."` in the config, or `$SUPERHUB_VAULT_PATH`.
 
 ### The server
 

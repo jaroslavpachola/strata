@@ -12,6 +12,7 @@ mod query;
 mod schema;
 mod seed;
 mod store;
+mod transfer;
 
 pub use api::Api;
 pub use cipher::open_encrypted;
@@ -20,4 +21,5 @@ pub use model::{Entry, Item, Kind, Locked, Partition, PropertyDef, TypeDef, Valu
 pub use query::{Query, Sort};
 pub use seed::{Seeded, seed_types};
 pub use store::{Relation, Store};
+pub use transfer::{Imported, TypeExport};
 pub use uuid::Uuid;

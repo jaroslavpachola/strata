@@ -19,6 +19,8 @@ serde.workspace = true
 serde_json.workspace = true
 rpassword.workspace = true
 toml.workspace = true
+age.workspace = true
+chrono.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true

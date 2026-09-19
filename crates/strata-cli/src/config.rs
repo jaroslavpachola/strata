@@ -1,5 +1,6 @@
 //! Where the store is, and where the vault passphrase comes from.
 
+use std::cell::OnceCell;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -17,6 +18,14 @@ pub struct Config {
     pub barbero_command: String,
     #[serde(default = "default_barbero_entry")]
     pub barbero_entry: String,
+    /// Where `strata export` writes [default: the SuperHub vault's
+    /// References/strata]
+    pub export_dir: Option<PathBuf>,
+    /// The SuperHub vault [default: $SUPERHUB_VAULT_PATH]
+    pub superhub_vault: Option<PathBuf>,
+    /// The passphrase once found, so one command asks once.
+    #[serde(skip)]
+    known: OnceCell<String>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -59,13 +68,31 @@ impl Config {
     /// Barbero if the config says so, else a prompt on the terminal. `confirm`
     /// asks twice at the prompt, for a vault about to be created.
     pub fn passphrase(&self, confirm: bool) -> anyhow::Result<String> {
-        if let Ok(p) = std::env::var(PASSPHRASE_ENV) {
-            return Ok(p);
+        if let Some(p) = self.known.get() {
+            return Ok(p.clone());
         }
-        if self.cascade == Cascade::Barbero {
-            return self.ask_barbero();
+        let p = if let Ok(p) = std::env::var(PASSPHRASE_ENV) {
+            p
+        } else if self.cascade == Cascade::Barbero {
+            self.ask_barbero()?
+        } else {
+            prompt(confirm)?
+        };
+        Ok(self.known.get_or_init(|| p).clone())
+    }
+
+    /// `--out`, else `export_dir`, else `References/strata` in the
+    /// SuperHub vault (`superhub_vault`, or `$SUPERHUB_VAULT_PATH`).
+    pub fn export_dir(&self, out: Option<PathBuf>) -> anyhow::Result<PathBuf> {
+        if let Some(dir) = out.or_else(|| self.export_dir.clone()) {
+            return Ok(dir);
         }
-        prompt(confirm)
+        let vault = self
+            .superhub_vault
+            .clone()
+            .or_else(|| std::env::var_os("SUPERHUB_VAULT_PATH").map(PathBuf::from))
+            .context("where to? pass --out, or set export_dir or superhub_vault in the config")?;
+        Ok(vault.join("References/strata"))
     }
 
     /// `barbero-cli get <entry>`: its master-password prompt goes to the

@@ -196,7 +196,7 @@ impl Store {
 
     /// The catalogues a type's definition is written to: always the open
     /// one, and the vault's own for a vault type.
-    fn catalogues(&self, partition: Partition) -> Result<&'static [&'static str]> {
+    pub(crate) fn catalogues(&self, partition: Partition) -> Result<&'static [&'static str]> {
         self.schema(partition)?;
         Ok(match partition {
             Partition::Open => &["main"],
@@ -810,7 +810,7 @@ impl Store {
     }
 }
 
-fn insert_property(
+pub(crate) fn insert_property(
     conn: &Connection,
     db: &str,
     type_name: &str,
@@ -838,7 +838,13 @@ fn choices_json(choices: &Option<Vec<String>>) -> Option<String> {
     choices.as_ref().map(|c| serde_json::json!(c).to_string())
 }
 
-fn put_value(conn: &Connection, db: &str, id: Uuid, property: &str, value: &Value) -> Result<()> {
+pub(crate) fn put_value(
+    conn: &Connection,
+    db: &str,
+    id: Uuid,
+    property: &str,
+    value: &Value,
+) -> Result<()> {
     conn.execute(
         &format!(
             "INSERT INTO {db}.value (item, property, value) VALUES (?1, ?2, ?3)
@@ -850,7 +856,7 @@ fn put_value(conn: &Connection, db: &str, id: Uuid, property: &str, value: &Valu
 }
 
 /// Check every value against its property's kind, dropping nulls.
-fn validate(def: &TypeDef, values: Values) -> Result<Values> {
+pub(crate) fn validate(def: &TypeDef, values: Values) -> Result<Values> {
     let mut out = Values::new();
     for (property, value) in values {
         let p = def

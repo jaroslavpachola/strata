@@ -251,6 +251,15 @@ fn handle(
             Ok((json(seeded), events))
         }
         Request::SeedNeedsVault => Ok((json(store.seed_needs_vault()?), vec![])),
+        Request::ExportType { type_name } => Ok((json(store.export_type(&type_name)?), vec![])),
+        Request::Import { types } => {
+            let imported = store.import(&types)?;
+            let events = types
+                .iter()
+                .flat_map(|t| [Event::type_changed(&t.def.name), Event::items(&t.def.name)])
+                .collect();
+            Ok((json(imported), events))
+        }
     }
 }
 
@@ -289,7 +298,7 @@ fn status(code: &str) -> StatusCode {
         "wrong_passphrase" => StatusCode::FORBIDDEN,
         "unknown_type" | "unknown_property" | "unknown_item" => StatusCode::NOT_FOUND,
         "no_vault" | "vault_exists" | "type_exists" | "property_exists" | "required_unmet"
-        | "choices_unmet" => StatusCode::CONFLICT,
+        | "choices_unmet" | "type_conflict" | "item_exists" => StatusCode::CONFLICT,
         "corrupt" | "sqlite" | "io" | "server" => StatusCode::INTERNAL_SERVER_ERROR,
         _ => StatusCode::UNPROCESSABLE_ENTITY,
     }

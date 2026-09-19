@@ -201,6 +201,16 @@ server unlocked, and `strata watch` prints the event stream.
 
 *Gate: export, wipe the data dir, import, and the query results match.*
 
+*As built (0.6):* `<Type>.json` is the whole type (definition, items
+with their ids, times and authors, and relations from them); `<Type>.md`
+is a SuperHub reference note with the usual frontmatter, for reading.
+Vault types go together into `vault.json.age`, an age passphrase file
+under the vault passphrase. Import is one transaction: a type already
+there is reused if identical, replaced if empty (the export, edit,
+import path), refused otherwise; a taken id is refused. The default
+directory is `References/strata` in `superhub_vault` or
+`$SUPERHUB_VAULT_PATH`, or `export_dir` in the config.
+
 ### M7 - The TUI
 
 - `crates/strata-tui`: ratatui, one binary `strata-tui`.
