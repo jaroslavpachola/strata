@@ -9,7 +9,10 @@ See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
 
 ## Status
 
-**M0, not started.** Nothing builds yet; the plan is the whole repo.
+**M1.** `strata-core` opens `open.db`, runs its migrations, and declares,
+fills and queries types through a Rust API; SQLCipher is built in and
+proven by a round-trip test, but the vault partition is M2. The `strata`
+binary parses `--version` and nothing else yet.
 
 ## Layout, once it exists
 

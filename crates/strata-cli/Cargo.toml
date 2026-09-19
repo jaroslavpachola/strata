@@ -1,0 +1,16 @@
+[package]
+name = "strata-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "One-shot commands over the strata store, JSON in and out."
+
+[[bin]]
+name = "strata"
+path = "src/main.rs"
+
+[dependencies]
+strata-core.workspace = true
+anyhow.workspace = true
+clap.workspace = true
