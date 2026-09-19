@@ -13,15 +13,14 @@ mod output;
 mod transfer;
 
 use std::io::{IsTerminal, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
 use strata_core::{
-    Api, Kind, Partition, PropertyDef, Query, Sort, Store, TypeDef, Uuid, Values, VaultStatus,
-    paths,
+    Api, Kind, Partition, PropertyDef, Query, Sort, TypeDef, Uuid, Values, VaultStatus, paths,
 };
 use strata_server::Client;
 
@@ -253,7 +252,7 @@ fn run(cli: Cli, out: &Out) -> anyhow::Result<()> {
     if let Command::Watch { type_name } = &cli.command {
         return watch(type_name.as_deref(), out);
     }
-    let mut store = connect(&dir, matches!(cli.command, Command::Init { .. }))?;
+    let mut store = strata_server::connect(&dir, matches!(cli.command, Command::Init { .. }))?;
 
     // --unlock is for this command: a vault that was locked is locked
     // again after it, even with a server that would keep it open
@@ -274,37 +273,9 @@ fn run(cli: Cli, out: &Out) -> anyhow::Result<()> {
     result
 }
 
-/// The server, when one is running for this store; else the files.
-/// `$STRATA_SOCKET` names a server to use whatever the directory, and it
-/// must answer; the default socket is used only if its server holds the
-/// same directory, so a script with its own `--dir` gets its own store.
-fn connect(dir: &Path, creating: bool) -> anyhow::Result<Box<dyn Api>> {
-    if let Some(socket) = std::env::var_os("STRATA_SOCKET").filter(|s| !s.is_empty()) {
-        return Ok(Box::new(Client::connect(Path::new(&socket))?));
-    }
-    if let Ok(socket) = paths::default_socket()
-        && let Ok(client) = Client::connect(&socket)
-        && same_dir(&client.info().dir, dir)
-    {
-        return Ok(Box::new(client));
-    }
-    if !creating && !dir.join("open.db").exists() {
-        bail!("no store at {}: run `strata init`", dir.display());
-    }
-    Ok(Box::new(Store::open(dir)?))
-}
-
-fn same_dir(a: &Path, b: &Path) -> bool {
-    let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
-    canon(a) == canon(b)
-}
-
 /// Print the server's events, one per line, until it stops.
 fn watch(type_name: Option<&str>, out: &Out) -> anyhow::Result<()> {
-    let socket = match std::env::var_os("STRATA_SOCKET").filter(|s| !s.is_empty()) {
-        Some(s) => PathBuf::from(s),
-        None => paths::default_socket()?,
-    };
+    let socket = strata_server::socket()?;
     let client = Client::connect(&socket).context("watch needs a running strata-server")?;
     for event in client.events(type_name)? {
         let event = event?;

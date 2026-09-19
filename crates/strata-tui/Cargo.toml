@@ -1,0 +1,24 @@
+[package]
+name = "strata-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A ratatui browser and editor over the strata store."
+
+[[bin]]
+name = "strata-tui"
+path = "src/main.rs"
+
+[dependencies]
+strata-core.workspace = true
+strata-server.workspace = true
+ratatui.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

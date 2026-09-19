@@ -23,6 +23,12 @@ pub struct Config {
     pub export_dir: Option<PathBuf>,
     /// The SuperHub vault [default: $SUPERHUB_VAULT_PATH]
     pub superhub_vault: Option<PathBuf>,
+    /// strata-tui's, read there: the colour theme and its key bindings.
+    /// Accepted here so the one file serves both.
+    #[serde(default, rename = "theme")]
+    _theme: Option<String>,
+    #[serde(default, rename = "keys")]
+    _keys: std::collections::BTreeMap<String, String>,
     /// The passphrase once found, so one command asks once.
     #[serde(skip)]
     known: OnceCell<String>,

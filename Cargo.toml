@@ -4,10 +4,11 @@ members = [
     "crates/strata-core",
     "crates/strata-cli",
     "crates/strata-server",
+    "crates/strata-tui",
 ]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/jaroslavpachola/strata"
@@ -43,4 +44,6 @@ http-body-util = "0.1"
 futures-util = "0.3"
 # vault types leave the store only inside an age file
 age = "0.12"
+# the TUI, on the ratatui rcmd uses
+ratatui = "0.29"
 tempfile = "3"

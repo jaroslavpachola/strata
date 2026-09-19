@@ -9,8 +9,8 @@ See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
 
 ## Status
 
-**M6 (0.6).** The core library, the `strata` CLI and `strata-server`
-work: types, items, relations and queries over two SQLite files,
+**M7 (0.7).** The core library, the `strata` CLI, `strata-server` and
+`strata-tui` work: types, items, relations and queries over two SQLite files,
 `open.db` in the clear and `vault.db` under SQLCipher. While the vault is
 locked its items show only as `{id, type, locked}` placeholders and every
 write to it is refused. `strata init` seeds a Task type (open) and a
@@ -36,6 +36,15 @@ Barbero when `~/.config/strata/config.toml` says so, else a prompt:
     barbero_entry = "strata/vault"
 
 Every write records an author: `--author`, `$STRATA_AUTHOR`, or `$USER`.
+
+### The TUI
+
+    strata-tui                           # a table per type; ? for keys
+
+Enter opens an item in a form, `n` adds one, `/` filters
+(`status=todo`, or any words), `s` sorts, `u` unlocks the vault. Keys
+rebind under `[keys]` in the config (`"x" = "quit"`), colours with
+`theme = "mc" | "dark" | "bw"`.
 
 ### Export
 
@@ -70,5 +79,5 @@ in: see the script's header for the contract.
     crates/strata-core     schema, the two databases, vault state, query, export
     crates/strata-cli      one-shot commands, JSON in and out
     crates/strata-server   a Unix socket for long-lived clients, and its client
-    crates/strata-tui      ratatui browser (M7)
+    crates/strata-tui      ratatui browser and editor
     crates/strata-egui     egui widgets, standalone and as a Plocha pane (M8, M9)

@@ -26,17 +26,18 @@ jobs:
             echo "::error::tag $GITHUB_REF_NAME, but Cargo.toml says $version" && exit 1
           fi
       - run: cargo test --workspace --locked
-      - run: cargo build --release --locked -p strata-cli -p strata-server
+      - run: cargo build --release --locked -p strata-cli -p strata-server -p strata-tui
       - name: Smoke test
         run: |
           target/release/strata --version
           target/release/strata-server --version
+          target/release/strata-tui --version
       - name: Package
         run: |
           version="${GITHUB_REF_NAME#v}"
           dir="strata-$version-x86_64-linux"
           mkdir "$dir"
-          cp target/release/strata target/release/strata-server README.md LICENSE "$dir"/
+          cp target/release/strata target/release/strata-server target/release/strata-tui README.md LICENSE "$dir"/
           tar czf "$dir.tar.gz" "$dir"
       - name: Create release
         env:

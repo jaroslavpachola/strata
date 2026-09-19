@@ -222,6 +222,18 @@ directory is `References/strata` in `superhub_vault` or
 
 *Gate: every M4 seed type can be browsed and edited without the CLI.*
 
+*As built (0.7):* a type list beside the table; `s`/`S` step the sort
+through the columns and reverse it; the filter line takes
+`property=value` for the store and free words for the rows; Enter opens
+a form where Left/Right step through choices and booleans; `n` new, `d`
+delete, `u`/`l` unlock and lock. With a server it follows the server's
+events. rcmd's conventions as they turned out to be: bindings under
+`[keys]` in the same config file (`"x" = "quit"`), `theme = "mc" |
+"dark" | "bw"` with mc's blue as the default; `--config` is strata's
+own. The passphrase is `$STRATA_VAULT_PASSPHRASE` or a prompt in the
+TUI; Barbero's prompt would fight the TUI for the terminal, so the
+cascade stays with the CLI.
+
 ### M8 - egui widgets
 
 - `crates/strata-egui`: a library, not a binary at first. Widgets:

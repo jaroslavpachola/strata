@@ -6,9 +6,11 @@
 //! running for the same store.
 
 mod client;
+mod connect;
 pub mod protocol;
 mod server;
 
 pub use client::{Client, Events};
+pub use connect::{connect, server_for, socket};
 pub use protocol::{Event, EventKind, Info};
 pub use server::serve;
