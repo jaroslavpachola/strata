@@ -9,6 +9,8 @@
 //! through it, so the two never fight over the files or the vault key.
 
 mod config;
+mod links;
+mod mcp;
 mod output;
 mod transfer;
 
@@ -99,6 +101,17 @@ enum Command {
         #[arg(value_name = "DIR")]
         from: Option<PathBuf>,
     },
+    /// Items that name a note (their `note` property), and notes that link
+    /// an item (`strata://item/<id>`): the notes from --vault, the
+    /// `superhub_vault` directory, or the hub at $SUPERHUB_URL
+    Links {
+        /// A SuperHub vault on disk to read the notes from
+        #[arg(long)]
+        vault: Option<PathBuf>,
+    },
+    /// Serve the store to an LLM over MCP on stdio: read-only, and vault
+    /// items only as placeholders, locked or not
+    Mcp,
     /// Print changes as strata-server sees them, one per line, until it
     /// stops: items, type, or vault, and the type concerned
     Watch {
@@ -533,6 +546,30 @@ fn command(cli: Cli, store: &mut dyn Api, config: &Config, out: &Out) -> anyhow:
                 )
             })
         }
+
+        Command::Links { vault } => {
+            let notes = config.notes(vault);
+            let found = links::links(store, &notes)?;
+            out.value(&found, |_| {
+                let mut s = String::new();
+                for i in &found.items {
+                    s.push_str(&format!("{} {} -> {}\n", i.type_name, i.id, i.note));
+                }
+                for n in &found.notes {
+                    let what = n.type_name.as_deref().unwrap_or("(no such item)");
+                    s.push_str(&format!("{} -> {what} {}\n", n.note, n.id));
+                }
+                match &found.notes_from {
+                    Some(from) => s.push_str(&format!("notes read from {from}")),
+                    None => s.push_str(
+                        "notes not read: set superhub_vault, or $SUPERHUB_URL and $SUPERHUB_API_KEY",
+                    ),
+                }
+                s
+            })
+        }
+
+        Command::Mcp => mcp::serve(store),
 
         Command::Vault(cmd) => {
             if let VaultCmd::Lock = cmd {

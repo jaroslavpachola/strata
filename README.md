@@ -9,8 +9,9 @@ See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
 
 ## Status
 
-**M8 (0.8).** The core library, the `strata` CLI, `strata-server`,
-`strata-tui` and the egui widgets with `strata-desktop` work: types,
+**0.9: M0-M8 and M10** (M9, the Plocha pane, is next). The core
+library, the `strata` CLI, `strata-server`, `strata-tui` and the egui
+widgets with `strata-desktop` work: types,
 items, relations and queries over two SQLite files, `open.db` in the
 clear and `vault.db` under SQLCipher. While the vault is locked its items
 show only as `{id, type, locked}` placeholders and every write to it is
@@ -53,6 +54,16 @@ rebind under `[keys]` in the config (`"x" = "quit"`), colours with
 
 A type picker, a table or a kanban board, a form per item, and the
 vault's lock; `strata-egui` is the same widgets for a host such as Plocha.
+
+### SuperHub and LLMs
+
+    strata links                         # items naming notes, notes linking strata://item/<id>
+    claude mcp add strata -- strata mcp  # the store as MCP tools, read-only
+
+`strata mcp` never shows a vault value, locked or not: vault items come
+back as placeholders. `strata links` reads the notes from a SuperHub
+vault on disk (`superhub_vault`, `--vault`) or from the hub at
+`$SUPERHUB_URL` with `$SUPERHUB_API_KEY`.
 
 ### Export
 

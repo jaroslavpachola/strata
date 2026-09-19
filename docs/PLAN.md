@@ -282,6 +282,19 @@ canvas, and closing and reopening Plocha brings them back.*
 
 *Gate: `daily-prefill` lists strata tasks.*
 
+*As built (0.9, before M9, which waits on Plocha):* strata ships its own
+MCP server, `strata mcp` on stdio, rather than adding tools to
+SuperHub's: SuperHub's is a proxy to a remote hub, strata's data is
+local. It is read-only (`strata_types`, `strata_query`, `strata_item`)
+and blind to the vault even unlocked: vault items come back as
+placeholders, and a filter or value sort on a vault type is refused,
+since which items match would itself say something. `strata links`
+reads items' `note` paths from the store and `strata://item/<id>` links
+from the notes, on disk (`--vault`, `superhub_vault`) or through the
+hub's regex search (`$SUPERHUB_URL`, `$SUPERHUB_API_KEY`). The
+`daily-prefill` skill gains an "Open in strata" section beside its
+carry-overs rather than replacing them, until the tasks live in strata.
+
 ### Later, in no order
 
 - **Sync.** A change table in each database, applied to a second machine

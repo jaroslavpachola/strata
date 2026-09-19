@@ -719,3 +719,236 @@ fn export_goes_to_the_superhub_vault_by_default() {
     let err = env.fails(1, &["export"], None);
     assert!(err["error"].as_str().unwrap().contains("--out"));
 }
+
+/// A task that names a note, a note that links it, and one that links
+/// nothing that exists: `strata links` reports both directions.
+fn links_fixture(env: &Env) -> (String, String) {
+    let task = env.ok(
+        &["item", "add", "Task"],
+        Some(json!({"title": "bridge", "status": "doing", "note": "Projects/strata.md"})),
+    );
+    let task = task["id"].as_str().unwrap().to_string();
+    let gone = "01a0b8c6-0000-7000-8000-000000000000".to_string();
+    (task, gone)
+}
+
+#[test]
+fn links_read_notes_from_a_vault_on_disk() {
+    let env = Env::new();
+    let (task, gone) = links_fixture(&env);
+    let vault = env.dir.path().join("superhub");
+    std::fs::create_dir_all(vault.join("Daily")).unwrap();
+    std::fs::create_dir_all(vault.join(".git")).unwrap();
+    std::fs::write(
+        vault.join("Daily/2026-09-19.md"),
+        format!("- [ ] push the [bridge](strata://item/{task})\n- old strata://item/{gone}\n"),
+    )
+    .unwrap();
+    std::fs::write(
+        vault.join(".git/ignored.md"),
+        format!("strata://item/{task}"),
+    )
+    .unwrap();
+
+    let found = env.ok(&["links", "--vault", vault.to_str().unwrap()], None);
+    assert_eq!(
+        found["items"],
+        json!([{"id": task, "type": "Task", "note": "Projects/strata.md"}])
+    );
+    assert_eq!(
+        found["notes"],
+        json!([
+            {"note": "Daily/2026-09-19.md", "id": gone, "type": null},
+            {"note": "Daily/2026-09-19.md", "id": task, "type": "Task"},
+        ])
+    );
+}
+
+#[test]
+fn links_ask_the_hub_when_the_vault_is_elsewhere() {
+    use std::io::{BufRead, BufReader, Write};
+    let env = Env::new();
+    let (task, _) = links_fixture(&env);
+
+    // a stand-in for SuperHub's API: search, then one note, key required
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let note =
+        json!({"path": "Daily/2026-09-19.md", "content": format!("see strata://item/{task}")});
+    std::thread::spawn(move || {
+        for stream in listener.incoming().take(2) {
+            let mut stream = stream.unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request = String::new();
+            let mut authorized = false;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                authorized |= line.eq_ignore_ascii_case("authorization: Bearer hub-key\r\n");
+                if request.is_empty() {
+                    request = line;
+                }
+            }
+            let body = if !authorized {
+                "{\"error\": \"who are you\"}".to_string()
+            } else if request.starts_with("GET /api/search?") && request.contains("mode=regex") {
+                json!([{"path": "Daily/2026-09-19.md"}]).to_string()
+            } else if request.starts_with("GET /api/notes/Daily/2026-09-19.md ") {
+                note.to_string()
+            } else {
+                "{}".to_string()
+            };
+            let status = if authorized {
+                "200 OK"
+            } else {
+                "401 Unauthorized"
+            };
+            write!(
+                stream,
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        }
+    });
+
+    let out = Command::new(BIN)
+        .args(["--json", "links"])
+        .env("STRATA_DIR", env.dir.path().join("store"))
+        .env("STRATA_CONFIG", "/dev/null")
+        .env_remove("STRATA_SOCKET")
+        .env_remove("SUPERHUB_VAULT_PATH")
+        .env("XDG_RUNTIME_DIR", env.dir.path())
+        .env("SUPERHUB_URL", &url)
+        .env("SUPERHUB_API_KEY", "hub-key")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let found: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(found["notes_from"], url.as_str());
+    assert_eq!(
+        found["notes"],
+        json!([{"note": "Daily/2026-09-19.md", "id": task, "type": "Task"}])
+    );
+}
+
+/// `strata mcp` over stdio: what an LLM sees of the store.
+#[test]
+fn mcp_shows_open_items_and_never_a_vault_value() {
+    use std::io::{BufRead, BufReader, Write};
+    let env = Env::new();
+    env.ok(
+        &["item", "add", "Task"],
+        Some(json!([{"title": "open one", "status": "todo"}, {"title": "done one", "status": "done"}])),
+    );
+    let snapshot = env.ok(
+        &["-u", "item", "add", "PortfolioSnapshot"],
+        Some(json!({"taken_at": "2026-09-19", "currency": "EUR", "total": 1234, "positions": []})),
+    );
+    let snapshot = snapshot["id"].as_str().unwrap();
+
+    // unlocked on purpose: MCP must not show the vault even then
+    let mut child = Command::new(BIN)
+        .args(["-u", "mcp"])
+        .env("STRATA_DIR", env.dir.path().join("store"))
+        .env("STRATA_CONFIG", "/dev/null")
+        .env("STRATA_VAULT_PASSPHRASE", PASS)
+        .env_remove("STRATA_SOCKET")
+        .env("XDG_RUNTIME_DIR", env.dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    struct Session {
+        stdin: std::process::ChildStdin,
+        stdout: BufReader<std::process::ChildStdout>,
+    }
+    impl Session {
+        fn send(&mut self, msg: Value) {
+            writeln!(self.stdin, "{msg}").unwrap();
+        }
+        fn ask(&mut self, msg: Value) -> Value {
+            self.send(msg);
+            let mut line = String::new();
+            self.stdout.read_line(&mut line).unwrap();
+            serde_json::from_str(&line).unwrap()
+        }
+        /// A tool's answer: whether it is an error, and its text.
+        fn call(&mut self, id: i64, name: &str, args: Value) -> (bool, String) {
+            let reply = self.ask(json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+                                        "params": {"name": name, "arguments": args}}));
+            let result = &reply["result"];
+            let text = result["content"][0]["text"].as_str().unwrap().to_string();
+            (result["isError"].as_bool().unwrap(), text)
+        }
+    }
+    let mut mcp = Session {
+        stdin: child.stdin.take().unwrap(),
+        stdout: BufReader::new(child.stdout.take().unwrap()),
+    };
+
+    let init = mcp.ask(json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                              "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                                         "clientInfo": {"name": "test", "version": "0"}}}));
+    assert_eq!(init["result"]["serverInfo"]["name"], "strata");
+    assert_eq!(init["result"]["protocolVersion"], "2025-06-18");
+    // a notification gets no answer: the next line is the ping's
+    mcp.send(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
+    assert_eq!(
+        mcp.ask(json!({"jsonrpc": "2.0", "id": 2, "method": "ping"}))["id"],
+        2
+    );
+
+    let tools = mcp.ask(json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}));
+    let names: Vec<_> = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(names, ["strata_types", "strata_query", "strata_item"]);
+
+    let (err, text) = mcp.call(
+        4,
+        "strata_query",
+        json!({"type": "Task", "filter": {"status": "todo"}}),
+    );
+    assert!(!err);
+    let todo: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(todo.as_array().unwrap().len(), 1);
+    assert_eq!(todo[0]["values"]["title"], "open one");
+
+    let (err, text) = mcp.call(5, "strata_query", json!({"type": "PortfolioSnapshot"}));
+    assert!(!err);
+    assert_eq!(
+        serde_json::from_str::<Value>(&text).unwrap(),
+        json!([{"id": snapshot, "type": "PortfolioSnapshot", "locked": true}])
+    );
+    let (err, text) = mcp.call(
+        6,
+        "strata_query",
+        json!({"type": "PortfolioSnapshot", "filter": {"currency": "EUR"}}),
+    );
+    assert!(err && text.contains("vault"), "{text}");
+    let (err, text) = mcp.call(
+        7,
+        "strata_item",
+        json!({"id": format!("strata://item/{snapshot}")}),
+    );
+    assert!(!err);
+    assert!(!text.contains("1234") && !text.contains("EUR"), "{text}");
+    let (err, _) = mcp.call(8, "strata_nothing", json!({}));
+    assert!(err);
+    let unknown = mcp.ask(json!({"jsonrpc": "2.0", "id": 9, "method": "resources/list"}));
+    assert_eq!(unknown["error"]["code"], -32601);
+
+    drop(mcp);
+    assert!(child.wait().unwrap().success());
+}

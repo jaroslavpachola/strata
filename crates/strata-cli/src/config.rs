@@ -23,6 +23,9 @@ pub struct Config {
     pub export_dir: Option<PathBuf>,
     /// The SuperHub vault [default: $SUPERHUB_VAULT_PATH]
     pub superhub_vault: Option<PathBuf>,
+    /// A SuperHub hub, for `strata links` when the vault is not on this
+    /// disk [default: $SUPERHUB_URL]; its key comes from $SUPERHUB_API_KEY
+    pub superhub_url: Option<String>,
     /// strata-tui's, read there: the colour theme and its key bindings.
     /// Accepted here so the one file serves both.
     #[serde(default, rename = "theme")]
@@ -85,6 +88,31 @@ impl Config {
             prompt(confirm)?
         };
         Ok(self.known.get_or_init(|| p).clone())
+    }
+
+    /// Where `strata links` reads notes: `--vault`, else a SuperHub vault
+    /// on disk, else the hub over its API, else nowhere.
+    pub fn notes(&self, dir: Option<PathBuf>) -> crate::links::Notes {
+        use crate::links::Notes;
+        let dir = dir.or_else(|| self.superhub_vault.clone()).or_else(|| {
+            std::env::var_os("SUPERHUB_VAULT_PATH")
+                .map(PathBuf::from)
+                .filter(|p| p.is_dir())
+        });
+        if let Some(dir) = dir {
+            return Notes::Dir(dir);
+        }
+        let url = self
+            .superhub_url
+            .clone()
+            .or_else(|| std::env::var("SUPERHUB_URL").ok());
+        match url {
+            Some(url) => Notes::Hub {
+                url,
+                key: std::env::var("SUPERHUB_API_KEY").ok(),
+            },
+            None => Notes::Nowhere,
+        }
     }
 
     /// `--out`, else `export_dir`, else `References/strata` in the
