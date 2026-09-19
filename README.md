@@ -10,12 +10,13 @@ See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
 ## Status
 
 **M8 (0.8).** The core library, the `strata` CLI, `strata-server`,
-`strata-tui` and the egui widgets with `strata-desktop` work: types, items, relations and queries over two SQLite files,
-`open.db` in the clear and `vault.db` under SQLCipher. While the vault is
-locked its items show only as `{id, type, locked}` placeholders and every
-write to it is refused. `strata init` seeds a Task type (open) and a
-PortfolioSnapshot type (vault), and `scripts/portfolio-snapshot` fills
-the latter from a stand-in provider.
+`strata-tui` and the egui widgets with `strata-desktop` work: types,
+items, relations and queries over two SQLite files, `open.db` in the
+clear and `vault.db` under SQLCipher. While the vault is locked its items
+show only as `{id, type, locked}` placeholders and every write to it is
+refused. `strata init` seeds a Task type (open) and a PortfolioSnapshot
+type (vault), and `scripts/portfolio-snapshot` fills the latter from a
+stand-in provider.
 
 ## Using it
 
