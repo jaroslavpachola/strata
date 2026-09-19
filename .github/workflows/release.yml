@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # a tag that disagrees with Cargo.toml would ship a binary whose
+      # --version names another release
+      - name: Tag matches the workspace version
+        run: |
+          version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME, but Cargo.toml says $version" && exit 1
+          fi
+      - run: cargo test --workspace --locked
+      - run: cargo build --release --locked -p strata-cli
+      - name: Smoke test
+        run: target/release/strata --version
+      - name: Package
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          dir="strata-$version-x86_64-linux"
+          mkdir "$dir"
+          cp target/release/strata README.md LICENSE "$dir"/
+          tar czf "$dir.tar.gz" "$dir"
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" strata-*.tar.gz --title "$GITHUB_REF_NAME" --generate-notes
