@@ -1,0 +1,346 @@
+//! The CLI as a script sees it: JSON on stdin, JSON on stdout, and the
+//! exit code.
+
+use std::io::Write;
+use std::path::Path;
+use std::process::{Command, Output, Stdio};
+
+use serde_json::{Value, json};
+use tempfile::TempDir;
+
+const BIN: &str = env!("CARGO_BIN_EXE_strata");
+const PASS: &str = "cli passphrase";
+
+/// A store directory and the environment to drive it with.
+struct Env {
+    dir: TempDir,
+    config: Option<String>,
+    passphrase: Option<&'static str>,
+}
+
+impl Env {
+    /// An initialised store with a vault, the passphrase in the env.
+    fn new() -> Self {
+        let env = Self {
+            dir: tempfile::tempdir().unwrap(),
+            config: None,
+            passphrase: Some(PASS),
+        };
+        env.ok(&["init"], None);
+        env
+    }
+
+    fn run(&self, args: &[&str], stdin: Option<Value>) -> Output {
+        let config = self.dir.path().join("config.toml");
+        std::fs::write(&config, self.config.as_deref().unwrap_or("")).unwrap();
+        let mut cmd = Command::new(BIN);
+        cmd.arg("--json")
+            .args(args)
+            .env("STRATA_DIR", self.dir.path().join("store"))
+            .env("STRATA_CONFIG", &config)
+            .env("STRATA_AUTHOR", "test")
+            .env_remove("STRATA_VAULT_PASSPHRASE")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(p) = self.passphrase {
+            cmd.env("STRATA_VAULT_PASSPHRASE", p);
+        }
+        let mut child = cmd.spawn().unwrap();
+        let mut pipe = child.stdin.take().unwrap();
+        if let Some(body) = stdin {
+            pipe.write_all(body.to_string().as_bytes()).unwrap();
+        }
+        drop(pipe);
+        child.wait_with_output().unwrap()
+    }
+
+    /// Run, expect exit 0, and parse stdout.
+    fn ok(&self, args: &[&str], stdin: Option<Value>) -> Value {
+        let out = self.run(args, stdin);
+        assert!(
+            out.status.success(),
+            "strata {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).unwrap()
+    }
+
+    /// Run, expect exit `code`, and parse the JSON error on stderr.
+    fn fails(&self, code: i32, args: &[&str], stdin: Option<Value>) -> Value {
+        let out = self.run(args, stdin);
+        assert_eq!(
+            out.status.code(),
+            Some(code),
+            "strata {args:?}: stdout {} stderr {}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(out.stdout.is_empty());
+        serde_json::from_slice(&out.stderr).unwrap()
+    }
+}
+
+fn with_account(env: &Env) -> String {
+    env.ok(
+        &[
+            "-u",
+            "type",
+            "add",
+            "Account",
+            "--vault",
+            "-p",
+            "name:text!",
+            "-p",
+            "number:text",
+        ],
+        None,
+    );
+    let item = env.ok(
+        &["-u", "item", "add", "Account"],
+        Some(json!({"name": "savings", "number": "CZ65"})),
+    );
+    item["id"].as_str().unwrap().to_string()
+}
+
+/// The M3 gate, as a shell script.
+#[test]
+fn gate_script() {
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/gate.sh");
+    let out = Command::new("bash")
+        .arg(script)
+        .env("STRATA", BIN)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn exit_codes_say_what_went_wrong() {
+    let env = Env::new();
+    let id = with_account(&env);
+
+    let err = env.fails(2, &["item", "get", &id], None);
+    assert_eq!(err["locked"], true);
+    env.fails(2, &["item", "add", "Account"], Some(json!({"name": "x"})));
+    env.fails(2, &["type", "move", "Account", "open"], None);
+
+    let err = env.fails(
+        1,
+        &["item", "get", "01a0b8c6-77cd-7760-948f-6aa17a012b2b"],
+        None,
+    );
+    assert_eq!(err["locked"], false);
+    env.fails(1, &["type", "show", "Nope"], None);
+    // a usage error is 1 too, not clap's 2
+    let out = env.run(&["no-such-command"], None);
+    assert_eq!(out.status.code(), Some(1));
+
+    // a query is answered, with placeholders
+    let got = env.ok(&["query", "-t", "Account"], None);
+    assert_eq!(got, json!([{"id": id, "type": "Account", "locked": true}]));
+}
+
+#[test]
+fn a_wrong_passphrase_is_an_error_not_a_lock() {
+    let mut env = Env::new();
+    with_account(&env);
+    env.passphrase = Some("wrong");
+    let err = env.fails(1, &["-u", "query", "-t", "Account"], None);
+    assert!(err["error"].as_str().unwrap().contains("wrong passphrase"));
+    env.fails(1, &["vault", "unlock"], None);
+}
+
+#[test]
+fn with_no_passphrase_anywhere_it_says_where_to_put_one() {
+    let mut env = Env::new();
+    env.passphrase = None;
+    let err = env.fails(1, &["-u", "query", "-t", "Account"], None);
+    assert!(
+        err["error"]
+            .as_str()
+            .unwrap()
+            .contains("STRATA_VAULT_PASSPHRASE")
+    );
+}
+
+#[test]
+fn barbero_supplies_the_passphrase_when_configured() {
+    let mut env = Env::new();
+    let id = with_account(&env);
+
+    // a stand-in for barbero-cli: `get <entry>` prints one password
+    let fake = env.dir.path().join("fake-barbero");
+    std::fs::write(
+        &fake,
+        format!("#!/bin/sh\n[ \"$1 $2\" = 'get strata/vault' ] || exit 3\necho '{PASS}'\n"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+
+    env.passphrase = None;
+    env.config = Some(format!(
+        "cascade = \"barbero\"\nbarbero_command = \"{}\"\n",
+        fake.display()
+    ));
+    let got = env.ok(&["-u", "item", "get", &id], None);
+    assert_eq!(got["values"]["number"], "CZ65");
+
+    // the environment still comes first
+    env.passphrase = Some("wrong");
+    env.fails(1, &["-u", "item", "get", &id], None);
+
+    // and a Barbero that fails is an error, not a prompt
+    env.passphrase = None;
+    env.config = Some(format!(
+        "cascade = \"barbero\"\nbarbero_command = \"{}\"\nbarbero_entry = \"other\"\n",
+        fake.display()
+    ));
+    let err = env.fails(1, &["-u", "item", "get", &id], None);
+    assert!(err["error"].as_str().unwrap().contains("get other failed"));
+}
+
+#[test]
+fn a_bad_config_is_an_error() {
+    let mut env = Env::new();
+    env.config = Some("cascade = \"carrier pigeon\"\n".into());
+    env.fails(1, &["vault", "status"], None);
+}
+
+#[test]
+fn vault_status_and_init_are_idempotent() {
+    let env = Env::new();
+    assert_eq!(env.ok(&["vault", "status"], None)["vault"], "locked");
+    assert_eq!(
+        env.ok(&["-u", "vault", "status"], None)["vault"],
+        "unlocked"
+    );
+    assert_eq!(env.ok(&["vault", "unlock"], None)["vault"], "unlocked");
+    assert_eq!(env.ok(&["init"], None)["vault"], "locked");
+
+    let bare = Env {
+        dir: tempfile::tempdir().unwrap(),
+        config: None,
+        passphrase: None,
+    };
+    bare.fails(1, &["vault", "status"], None);
+    assert_eq!(bare.ok(&["init", "--no-vault"], None)["vault"], "absent");
+}
+
+#[test]
+fn a_batch_add_is_all_or_nothing() {
+    let env = Env::new();
+    env.ok(&["type", "add", "Task", "-p", "title:text!"], None);
+    let err = env.fails(
+        1,
+        &["item", "add", "Task"],
+        Some(json!([{"title": "one"}, {"title": 2}])),
+    );
+    assert!(err["error"].as_str().unwrap().contains("title"));
+    assert_eq!(env.ok(&["query", "-t", "Task"], None), json!([]));
+}
+
+#[test]
+fn types_come_from_flags_or_stdin() {
+    let env = Env::new();
+    let from_stdin = env.ok(
+        &["type", "add"],
+        Some(json!({
+            "name": "Bookmark",
+            "description": "a link",
+            "properties": [{"name": "url", "kind": "text", "required": true}]
+        })),
+    );
+    let def = &from_stdin[0];
+    assert_eq!(def["partition"], "open");
+    assert_eq!(def["properties"][0]["required"], true);
+
+    let changed = env.ok(&["type", "prop", "Bookmark", "add", "tags:json"], None);
+    assert_eq!(
+        changed[0]["properties"][1],
+        json!({"name": "tags", "kind": "json", "required": false})
+    );
+    env.ok(
+        &["type", "prop", "Bookmark", "rename", "tags", "labels"],
+        None,
+    );
+    env.ok(&["type", "prop", "Bookmark", "require", "labels"], None);
+    env.ok(&["type", "prop", "Bookmark", "optional", "labels"], None);
+    env.ok(&["type", "prop", "Bookmark", "remove", "labels"], None);
+    env.ok(&["type", "describe", "Bookmark", "worth keeping"], None);
+    let shown = env.ok(&["type", "show", "Bookmark"], None);
+    assert_eq!(shown[0]["description"], "worth keeping");
+    assert_eq!(shown[0]["properties"].as_array().unwrap().len(), 1);
+
+    env.fails(1, &["type", "add", "Bad", "-p", "x:colour"], None);
+    env.fails(
+        1,
+        &["type", "add", "-p", "x:text"],
+        Some(json!({"name": "X"})),
+    );
+    assert_eq!(env.ok(&["type", "list"], None).as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn where_values_read_as_json_when_they_parse() {
+    let env = Env::new();
+    env.ok(
+        &["type", "add", "Thing", "-p", "label:text", "-p", "n:number"],
+        None,
+    );
+    env.ok(
+        &["item", "add", "Thing"],
+        Some(json!([{"label": "3", "n": 3}, {"label": "plain"}])),
+    );
+    let by_number = env.ok(&["query", "-t", "Thing", "-w", "n=3"], None);
+    assert_eq!(by_number.as_array().unwrap().len(), 1);
+    let by_quoted = env.ok(&["query", "-t", "Thing", "-w", "label=\"3\""], None);
+    assert_eq!(by_quoted.as_array().unwrap().len(), 1);
+    let by_text = env.ok(&["query", "-t", "Thing", "-w", "label=plain"], None);
+    assert_eq!(by_text[0]["values"]["label"], "plain");
+    let missing = env.ok(&["query", "-t", "Thing", "-w", "n=null"], None);
+    assert_eq!(missing[0]["values"]["label"], "plain");
+}
+
+#[test]
+fn items_update_delete_and_relate() {
+    let env = Env::new();
+    let account = with_account(&env);
+    env.ok(&["type", "add", "Task", "-p", "title:text!"], None);
+    let task = env.ok(&["item", "add", "Task"], Some(json!({"title": "check"})));
+    let task = task["id"].as_str().unwrap();
+
+    let rels = env.ok(&["item", "relate", task, &account, "about"], None);
+    assert_eq!(
+        rels,
+        json!([{"source": task, "target": account, "kind": "about"}])
+    );
+    assert_eq!(
+        env.ok(&["item", "relations", &account], None)
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let updated = env.ok(
+        &["--author", "claude", "item", "update", task],
+        Some(json!({"title": "check it"})),
+    );
+    assert_eq!(updated["modified_by"], "claude");
+    assert_eq!(updated["author"], "test");
+
+    env.ok(&["item", "unrelate", task, &account, "about"], None);
+    assert_eq!(env.ok(&["item", "relations", task], None), json!([]));
+    assert_eq!(
+        env.ok(&["item", "delete", task], None),
+        json!({"deleted": task})
+    );
+    env.fails(1, &["item", "get", task], None);
+    env.fails(1, &["item", "update", &account], Some(json!([1])));
+}

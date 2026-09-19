@@ -130,6 +130,17 @@ or a value sort on a locked type is refused rather than answered.
 *Gate: a shell script creates a type, adds ten items and queries them
 back, in both partitions, driven only by the CLI.*
 
+*As built (0.3):* with no server yet, a vault is unlocked only for the
+command that asks with `-u`/`--unlock`; `vault unlock` checks the
+passphrase. The data dir is `--dir`/`$STRATA_DIR`, the author
+`--author`/`$STRATA_AUTHOR`/`$USER`, the config
+`$STRATA_CONFIG`/`$XDG_CONFIG_HOME/strata/config.toml`. Beyond the list
+above: `type prop` and `type describe` for runtime schema changes, and
+`item relate|unrelate|relations`. `item add` takes an array for a batch,
+all or nothing. Queries on a locked type answer with placeholders; `item
+get` on a locked item exits 2. The gate is
+`crates/strata-cli/tests/gate.sh`.
+
 ### M4 - Seed types and the first real script
 
 - `strata init` declares, idempotently:

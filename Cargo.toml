@@ -6,7 +6,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/jaroslavpachola/strata"
@@ -27,5 +27,8 @@ thiserror = "2"
 uuid = { version = "1", features = ["v7", "serde"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 anyhow = "1"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
+# the vault passphrase from the terminal, echo off, even with stdin piped
+rpassword = "7"
+toml = "1"
 tempfile = "3"

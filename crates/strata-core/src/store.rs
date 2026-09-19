@@ -506,40 +506,62 @@ impl Store {
     /// Create an item of `type_name`. Null values are the same as leaving
     /// the property out.
     pub fn add_item(&self, type_name: &str, values: Values, author: &str) -> Result<Item> {
+        let mut items = self.add_items(type_name, vec![values], author)?;
+        Ok(items.remove(0))
+    }
+
+    /// Create several items of `type_name`, all or none: one that fails
+    /// validation adds nothing.
+    pub fn add_items(
+        &self,
+        type_name: &str,
+        bodies: Vec<Values>,
+        author: &str,
+    ) -> Result<Vec<Item>> {
         check_author(author)?;
         let def = self.get_type(type_name)?;
         let db = self.schema(def.partition)?;
-        let values = validate(&def, values)?;
-        if let Some(p) = def
-            .properties
-            .iter()
-            .find(|p| p.required && !values.contains_key(&p.name))
-        {
-            return Err(Error::MissingRequired {
-                property: p.name.clone(),
-            });
-        }
-        let id = Uuid::now_v7();
+        let bodies = bodies
+            .into_iter()
+            .map(|values| {
+                let values = validate(&def, values)?;
+                match def
+                    .properties
+                    .iter()
+                    .find(|p| p.required && !values.contains_key(&p.name))
+                {
+                    Some(p) => Err(Error::MissingRequired {
+                        property: p.name.clone(),
+                    }),
+                    None => Ok(values),
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
         let now = now();
+        let mut ids = Vec::with_capacity(bodies.len());
         let tx = self.conn.unchecked_transaction()?;
-        tx.execute(
-            &format!(
-                "INSERT INTO {db}.item (id, type, created, modified, author, modified_by)
-                 VALUES (?1, ?2, ?3, ?3, ?4, ?4)"
-            ),
-            params![id.to_string(), type_name, now, author],
-        )?;
-        for (property, value) in &values {
-            put_value(&tx, db, id, property, value)?;
-        }
-        if def.partition == Partition::Vault {
+        for values in &bodies {
+            let id = Uuid::now_v7();
             tx.execute(
-                "INSERT INTO main.vault_index (id, type) VALUES (?1, ?2)",
-                params![id.to_string(), type_name],
+                &format!(
+                    "INSERT INTO {db}.item (id, type, created, modified, author, modified_by)
+                     VALUES (?1, ?2, ?3, ?3, ?4, ?4)"
+                ),
+                params![id.to_string(), type_name, now, author],
             )?;
+            for (property, value) in values {
+                put_value(&tx, db, id, property, value)?;
+            }
+            if def.partition == Partition::Vault {
+                tx.execute(
+                    "INSERT INTO main.vault_index (id, type) VALUES (?1, ?2)",
+                    params![id.to_string(), type_name],
+                )?;
+            }
+            ids.push(id);
         }
         tx.commit()?;
-        self.read_item(db, id)
+        ids.into_iter().map(|id| self.read_item(db, id)).collect()
     }
 
     /// An item with its values. One in the locked vault is
