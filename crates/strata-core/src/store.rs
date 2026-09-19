@@ -72,6 +72,9 @@ impl Store {
         // printing its decrypt errors to the caller's stderr.
         conn.pragma_update(None, "cipher_log_level", "NONE")?;
         conn.pragma_update(None, "foreign_keys", true)?;
+        // a server and a one-shot CLI may share open.db: wait for the
+        // other's write rather than fail on it
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         // A type moved into the vault must not stay readable in the free
         // pages of open.db: deleted content is overwritten with zeros.
         conn.pragma_update(None, "secure_delete", true)?;
@@ -81,6 +84,11 @@ impl Store {
             dir,
             unlocked: false,
         })
+    }
+
+    /// The directory the store lives in; `None` in memory.
+    pub fn dir(&self) -> Option<&Path> {
+        self.dir.as_deref()
     }
 
     // ---- the vault --------------------------------------------------

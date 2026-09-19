@@ -1,0 +1,28 @@
+[package]
+name = "strata-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A long-lived strata store behind a Unix socket, and the client that talks to it."
+
+[[bin]]
+name = "strata-server"
+path = "src/main.rs"
+
+[dependencies]
+strata-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+axum.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+futures-util.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

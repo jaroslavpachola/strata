@@ -56,6 +56,60 @@ pub enum Error {
     Sqlite(#[from] rusqlite::Error),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    /// An error the server reported that has no variant of its own here.
+    #[error("{message}")]
+    Remote { code: String, message: String },
+    /// The server could not be reached or answered nonsense.
+    #[error("strata-server: {0}")]
+    Server(String),
+}
+
+impl Error {
+    /// A stable name for the error, for the wire and for callers that
+    /// would rather match on a string than on the enum.
+    pub fn code(&self) -> &str {
+        match self {
+            Error::WrongPassphrase(_) => "wrong_passphrase",
+            Error::VaultLocked => "vault_locked",
+            Error::NoVault => "no_vault",
+            Error::VaultExists => "vault_exists",
+            Error::UnknownType(_) => "unknown_type",
+            Error::TypeExists(_) => "type_exists",
+            Error::UnknownProperty { .. } => "unknown_property",
+            Error::PropertyExists { .. } => "property_exists",
+            Error::UnknownItem(_) => "unknown_item",
+            Error::InvalidName(_) => "invalid_name",
+            Error::ReservedName(_) => "reserved_name",
+            Error::InvalidValue { .. } => "invalid_value",
+            Error::MissingRequired { .. } => "missing_required",
+            Error::RequiredUnmet { .. } => "required_unmet",
+            Error::BadChoices(_) => "bad_choices",
+            Error::NotAChoice { .. } => "not_a_choice",
+            Error::ChoicesUnmet { .. } => "choices_unmet",
+            Error::NoAuthor => "no_author",
+            Error::Corrupt(_) => "corrupt",
+            Error::Sqlite(_) => "sqlite",
+            Error::Io(_) => "io",
+            Error::Remote { code, .. } => code,
+            Error::Server(_) => "server",
+        }
+    }
+
+    /// An error as the server reported it. The vault's states come back as
+    /// themselves, so a caller can tell locked from absent without the
+    /// code; the rest keep their code and message.
+    pub fn from_remote(code: &str, message: &str) -> Self {
+        match code {
+            "vault_locked" => Error::VaultLocked,
+            "no_vault" => Error::NoVault,
+            "vault_exists" => Error::VaultExists,
+            "no_author" => Error::NoAuthor,
+            _ => Error::Remote {
+                code: code.to_string(),
+                message: message.to_string(),
+            },
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

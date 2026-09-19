@@ -46,7 +46,7 @@ impl Config {
     pub fn load() -> anyhow::Result<Self> {
         let path = match std::env::var_os("STRATA_CONFIG") {
             Some(p) => PathBuf::from(p),
-            None => xdg("XDG_CONFIG_HOME", ".config")?.join("strata/config.toml"),
+            None => strata_core::paths::default_config()?,
         };
         match std::fs::read_to_string(&path) {
             Ok(text) => toml::from_str(&text).with_context(|| format!("{}", path.display())),
@@ -110,19 +110,4 @@ fn prompt(confirm: bool) -> anyhow::Result<String> {
         bail!("an empty passphrase");
     }
     Ok(pass)
-}
-
-/// `$STRATA_DIR`, else `$XDG_DATA_HOME/strata`.
-pub fn default_dir() -> anyhow::Result<PathBuf> {
-    Ok(xdg("XDG_DATA_HOME", ".local/share")?.join("strata"))
-}
-
-fn xdg(var: &str, fallback: &str) -> anyhow::Result<PathBuf> {
-    match std::env::var_os(var) {
-        Some(p) if !p.is_empty() => Ok(PathBuf::from(p)),
-        _ => {
-            let home = std::env::var_os("HOME").context("neither $HOME nor $XDG_* is set")?;
-            Ok(PathBuf::from(home).join(fallback))
-        }
-    }
 }

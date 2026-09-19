@@ -1,6 +1,6 @@
 //! The types every store starts with.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::model::{Kind, Partition, PropertyDef, TypeDef};
 use crate::{Error, Result, Store};
@@ -32,7 +32,7 @@ pub fn seed_types() -> Vec<TypeDef> {
 }
 
 /// What [`Store::seed`] did.
-#[derive(Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Seeded {
     /// Declared now.
     pub added: Vec<String>,

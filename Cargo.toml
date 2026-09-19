@@ -3,10 +3,11 @@ resolver = "2"
 members = [
     "crates/strata-core",
     "crates/strata-cli",
+    "crates/strata-server",
 ]
 
 [workspace.package]
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/jaroslavpachola/strata"
@@ -17,6 +18,7 @@ strip = true
 
 [workspace.dependencies]
 strata-core = { path = "crates/strata-core" }
+strata-server = { path = "crates/strata-server" }
 # SQLCipher compiled in, linked against the system libcrypto: the vault
 # is a SQLCipher file and open.db is plain SQLite through the same build
 rusqlite = { version = "0.40", features = ["bundled-sqlcipher"] }
@@ -31,4 +33,12 @@ clap = { version = "4", features = ["derive", "env"] }
 # the vault passphrase from the terminal, echo off, even with stdin piped
 rpassword = "7"
 toml = "1"
+# the server: HTTP over a Unix socket, and a blocking client for it
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "signal", "sync", "macros"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+futures-util = "0.3"
 tempfile = "3"

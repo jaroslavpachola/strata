@@ -40,6 +40,9 @@ impl Env {
             .env("STRATA_CONFIG", &config)
             .env("STRATA_AUTHOR", "test")
             .env_remove("STRATA_VAULT_PASSPHRASE")
+            // never the user's own server
+            .env_remove("STRATA_SOCKET")
+            .env("XDG_RUNTIME_DIR", self.dir.path())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -110,6 +113,8 @@ fn gate_script() {
     let out = Command::new("bash")
         .arg(script)
         .env("STRATA", BIN)
+        .env_remove("STRATA_SOCKET")
+        .env("XDG_RUNTIME_DIR", "/nonexistent")
         .output()
         .unwrap();
     assert!(
@@ -447,6 +452,8 @@ fn the_portfolio_script_writes_a_snapshot_into_the_vault() {
         .env("STRATA_DIR", env.dir.path().join("store"))
         .env("STRATA_CONFIG", &config)
         .env("STRATA_VAULT_PASSPHRASE", PASS)
+        .env_remove("STRATA_SOCKET")
+        .env("XDG_RUNTIME_DIR", env.dir.path())
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -477,4 +484,149 @@ fn the_portfolio_script_writes_a_snapshot_into_the_vault() {
     let positions = snapshot["values"]["positions"].as_array().unwrap();
     assert_eq!(positions.len(), 3);
     assert_eq!(positions[2]["value"], 2003.57);
+}
+
+/// A strata-server in a thread, on `<dir>/strata.sock` for `<dir>/store`:
+/// where an [`Env`] on the same directory finds it by default.
+struct Server {
+    socket: std::path::PathBuf,
+    stop: Option<tokio::sync::oneshot::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Server {
+    fn start(dir: &Path) -> Self {
+        let socket = dir.join("strata.sock");
+        let store = strata_core::Store::open(&dir.join("store")).unwrap();
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let path = socket.clone();
+        let thread = std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(strata_server::serve(store, &path, async {
+                let _ = stopped.await;
+            }))
+            .unwrap();
+        });
+        for _ in 0..200 {
+            if std::os::unix::net::UnixStream::connect(&socket).is_ok() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        Self {
+            socket,
+            stop: Some(stop),
+            thread: Some(thread),
+        }
+    }
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(thread) = self.thread.take() {
+            thread.join().unwrap();
+        }
+    }
+}
+
+/// The M5 gate: M3's script, unchanged, against a running server.
+#[test]
+fn gate_script_against_a_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = Server::start(dir.path());
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/gate.sh");
+    let out = Command::new("bash")
+        .arg(script)
+        .env("STRATA", BIN)
+        .env("STRATA_SOCKET", &server.socket)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // it all went to the server's store, not the script's own directory
+    let store = strata_core::Store::open(&dir.path().join("store")).unwrap();
+    drop(server);
+    assert_eq!(store.list_types().unwrap().len(), 4);
+}
+
+#[test]
+fn a_server_keeps_the_vault_open_until_locked() {
+    let mut env = Env {
+        dir: tempfile::tempdir().unwrap(),
+        config: None,
+        passphrase: Some(PASS),
+    };
+    let _server = Server::start(env.dir.path());
+    // found by the default socket, since it serves the same directory
+    assert_eq!(env.ok(&["init"], None)["vault"], "locked");
+    let id = with_account(&env);
+
+    // -u unlocks for one command and locks again after
+    env.fails(2, &["item", "get", &id], None);
+
+    // vault unlock stays, across commands and without a passphrase
+    assert_eq!(env.ok(&["vault", "unlock"], None)["vault"], "unlocked");
+    env.passphrase = None;
+    let got = env.ok(&["item", "get", &id], None);
+    assert_eq!(got["values"]["number"], "CZ65");
+    // -u on an unlocked vault leaves it unlocked
+    env.ok(&["-u", "vault", "status"], None);
+    assert_eq!(env.ok(&["vault", "status"], None)["vault"], "unlocked");
+
+    assert_eq!(env.ok(&["vault", "lock"], None)["vault"], "locked");
+    env.fails(2, &["item", "get", &id], None);
+}
+
+#[test]
+fn watch_prints_what_changed() {
+    let env = Env::new();
+    let server = Server::start(env.dir.path());
+    let mut watcher = Command::new(BIN)
+        .args(["--json", "watch", "--type", "Task"])
+        .env("STRATA_SOCKET", &server.socket)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let stdout = watcher.stdout.take().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        use std::io::BufRead;
+        for line in std::io::BufReader::new(stdout).lines() {
+            if tx.send(line.unwrap()).is_err() {
+                break;
+            }
+        }
+    });
+
+    // the subscription is live once the server has it; add until heard
+    let mut heard = None;
+    for _ in 0..50 {
+        env.ok(
+            &["item", "add", "Task"],
+            Some(json!({"title": "watched", "status": "todo"})),
+        );
+        if let Ok(line) = rx.recv_timeout(std::time::Duration::from_millis(200)) {
+            heard = Some(line);
+            break;
+        }
+    }
+    let _ = watcher.kill();
+    let _ = watcher.wait();
+    let event: Value = serde_json::from_str(&heard.expect("an event")).unwrap();
+    assert_eq!(event, json!({"kind": "items", "type": "Task"}));
+}
+
+#[test]
+fn watch_without_a_server_says_so() {
+    let env = Env::new();
+    let err = env.fails(1, &["watch"], None);
+    assert!(err["error"].as_str().unwrap().contains("strata-server"));
 }

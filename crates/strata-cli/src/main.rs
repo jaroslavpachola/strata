@@ -4,20 +4,25 @@
 //! script (or an LLM writing one) never has to quote values into flags.
 //! `--json` makes every answer JSON on stdout and every error JSON on
 //! stderr. Exit codes: 0 ok, 1 error, 2 the vault is locked.
+//!
+//! With a strata-server running for the same store, every command goes
+//! through it, so the two never fight over the files or the vault key.
 
 mod config;
 mod output;
 
-use std::io::{IsTerminal, Read};
-use std::path::PathBuf;
+use std::io::{IsTerminal, Read, Write};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
 use strata_core::{
-    Kind, Partition, PropertyDef, Query, Sort, Store, TypeDef, Uuid, Values, VaultStatus,
+    Api, Kind, Partition, PropertyDef, Query, Sort, Store, TypeDef, Uuid, Values, VaultStatus,
+    paths,
 };
+use strata_server::Client;
 
 use crate::config::Config;
 use crate::output::Out;
@@ -35,8 +40,9 @@ struct Cli {
     /// Who is writing: jarda, claude, a script's name [default: $USER]
     #[arg(long, global = true, env = "STRATA_AUTHOR")]
     author: Option<String>,
-    /// Unlock the vault for this command; the passphrase comes from
-    /// $STRATA_VAULT_PASSPHRASE, Barbero or a prompt
+    /// Unlock the vault for this command, and lock it again after if it
+    /// was locked; the passphrase comes from $STRATA_VAULT_PASSPHRASE,
+    /// Barbero or a prompt
     #[arg(short, long, global = true)]
     unlock: bool,
     #[command(subcommand)]
@@ -46,7 +52,8 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Create the store and its vault (unless --no-vault), and declare
-    /// the seed types it lacks: Task, PortfolioSnapshot
+    /// the seed types it lacks: Task, PortfolioSnapshot. The vault is
+    /// locked when it is done
     Init {
         #[arg(long)]
         no_vault: bool,
@@ -79,6 +86,12 @@ enum Command {
     /// The vault's state
     #[command(subcommand)]
     Vault(VaultCmd),
+    /// Print changes as strata-server sees them, one per line, until it
+    /// stops: items, type, or vault, and the type concerned
+    Watch {
+        #[arg(short, long = "type")]
+        type_name: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -186,10 +199,11 @@ enum ItemCmd {
 enum VaultCmd {
     /// absent, locked or unlocked
     Status,
-    /// Check the passphrase. Until strata-server exists, a vault is only
-    /// unlocked for the command that unlocks it: use --unlock
+    /// Unlock the server's vault until `vault lock` or the server stops.
+    /// With no server there is nothing to keep it open: this checks the
+    /// passphrase, and --unlock opens the vault per command
     Unlock,
-    /// Nothing to do until strata-server exists
+    /// Lock the server's vault
     Lock,
 }
 
@@ -218,56 +232,81 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli, out: &Out) -> anyhow::Result<()> {
     let config = Config::load()?;
-    let dir = match cli.dir {
+    let dir = match cli.dir.clone() {
         Some(d) => d,
-        None => config::default_dir()?,
+        None => paths::default_dir()?,
     };
-
-    if let Command::Init { no_vault } = cli.command {
-        let mut store = Store::open(&dir)?;
-        if !no_vault {
-            match store.vault_status() {
-                VaultStatus::Absent => store.vault_create(&config.passphrase(true)?)?,
-                VaultStatus::Locked if store.seed_needs_vault()? => {
-                    store.vault_unlock(&config.passphrase(false)?)?
-                }
-                _ => {}
-            }
-        }
-        let seeded = store.seed()?;
-        let vault = store.vault_status();
-        return out.value(
-            &json!({"dir": dir, "vault": vault, "added": seeded.added, "skipped": seeded.skipped}),
-            |v| {
-                let mut s = format!(
-                    "{}  vault {}",
-                    dir.display(),
-                    v["vault"].as_str().unwrap_or("?")
-                );
-                for (label, key) in [("declared", "added"), ("skipped, vault locked", "skipped")] {
-                    let names: Vec<_> = v[key]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(Value::as_str)
-                        .collect();
-                    if !names.is_empty() {
-                        s.push_str(&format!("\n{label}: {}", names.join(", ")));
-                    }
-                }
-                s
-            },
-        );
+    if let Command::Watch { type_name } = &cli.command {
+        return watch(type_name.as_deref(), out);
     }
+    let mut store = connect(&dir, matches!(cli.command, Command::Init { .. }))?;
 
-    if !dir.join("open.db").exists() {
-        bail!("no store at {}: run `strata init`", dir.display());
-    }
-    let mut store = Store::open(&dir)?;
-    let unlock = cli.unlock || matches!(cli.command, Command::Vault(VaultCmd::Unlock));
-    if unlock {
+    // --unlock is for this command: a vault that was locked is locked
+    // again after it, even with a server that would keep it open
+    let keep = matches!(
+        cli.command,
+        Command::Vault(VaultCmd::Unlock | VaultCmd::Lock)
+    );
+    let relock = cli.unlock && !keep && store.vault_status()? == VaultStatus::Locked;
+    if (cli.unlock || matches!(cli.command, Command::Vault(VaultCmd::Unlock)))
+        && store.vault_status()? == VaultStatus::Locked
+    {
         store.vault_unlock(&config.passphrase(false)?)?;
     }
+    let result = command(cli, store.as_mut(), &config, out);
+    if relock {
+        store.vault_lock()?;
+    }
+    result
+}
+
+/// The server, when one is running for this store; else the files.
+/// `$STRATA_SOCKET` names a server to use whatever the directory, and it
+/// must answer; the default socket is used only if its server holds the
+/// same directory, so a script with its own `--dir` gets its own store.
+fn connect(dir: &Path, creating: bool) -> anyhow::Result<Box<dyn Api>> {
+    if let Some(socket) = std::env::var_os("STRATA_SOCKET").filter(|s| !s.is_empty()) {
+        return Ok(Box::new(Client::connect(Path::new(&socket))?));
+    }
+    if let Ok(socket) = paths::default_socket()
+        && let Ok(client) = Client::connect(&socket)
+        && same_dir(&client.info().dir, dir)
+    {
+        return Ok(Box::new(client));
+    }
+    if !creating && !dir.join("open.db").exists() {
+        bail!("no store at {}: run `strata init`", dir.display());
+    }
+    Ok(Box::new(Store::open(dir)?))
+}
+
+fn same_dir(a: &Path, b: &Path) -> bool {
+    let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    canon(a) == canon(b)
+}
+
+/// Print the server's events, one per line, until it stops.
+fn watch(type_name: Option<&str>, out: &Out) -> anyhow::Result<()> {
+    let socket = match std::env::var_os("STRATA_SOCKET").filter(|s| !s.is_empty()) {
+        Some(s) => PathBuf::from(s),
+        None => paths::default_socket()?,
+    };
+    let client = Client::connect(&socket).context("watch needs a running strata-server")?;
+    for event in client.events(type_name)? {
+        let event = event?;
+        out.value(&event, |v| {
+            let kind = v["kind"].as_str().unwrap_or("?");
+            match v["type"].as_str() {
+                Some(t) => format!("{kind} {t}"),
+                None => kind.to_string(),
+            }
+        })?;
+        std::io::stdout().flush()?;
+    }
+    Ok(())
+}
+
+fn command(cli: Cli, store: &mut dyn Api, config: &Config, out: &Out) -> anyhow::Result<()> {
     let author = || -> anyhow::Result<String> {
         cli.author
             .clone()
@@ -277,7 +316,54 @@ fn run(cli: Cli, out: &Out) -> anyhow::Result<()> {
     };
 
     match cli.command {
-        Command::Init { .. } => unreachable!("handled above"),
+        Command::Watch { .. } => unreachable!("handled in run"),
+
+        Command::Init { no_vault } => {
+            // a vault opened to create it or to seed it is locked again
+            // after: init sets up, it does not leave a server unlocked
+            let mut opened = false;
+            if !no_vault {
+                match store.vault_status()? {
+                    VaultStatus::Absent => {
+                        store.vault_create(&config.passphrase(true)?)?;
+                        opened = true;
+                    }
+                    VaultStatus::Locked if store.seed_needs_vault()? => {
+                        store.vault_unlock(&config.passphrase(false)?)?;
+                        opened = true;
+                    }
+                    _ => {}
+                }
+            }
+            let seeded = store.seed()?;
+            if opened {
+                store.vault_lock()?;
+            }
+            let vault = store.vault_status()?;
+            let dir = store.dir().unwrap_or_default();
+            out.value(
+                &json!({"dir": dir, "vault": vault, "added": seeded.added, "skipped": seeded.skipped}),
+                |v| {
+                    let mut s = format!(
+                        "{}  vault {}",
+                        dir.display(),
+                        v["vault"].as_str().unwrap_or("?")
+                    );
+                    for (label, key) in [("declared", "added"), ("skipped, vault locked", "skipped")] {
+                        let names: Vec<_> = v[key]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(Value::as_str)
+                            .collect();
+                        if !names.is_empty() {
+                            s.push_str(&format!("\n{label}: {}", names.join(", ")));
+                        }
+                    }
+                    s
+                },
+            )
+        }
 
         Command::Type(cmd) => match cmd {
             TypeCmd::List => out.types(&store.list_types()?),
@@ -429,7 +515,7 @@ fn run(cli: Cli, out: &Out) -> anyhow::Result<()> {
             if let VaultCmd::Lock = cmd {
                 store.vault_lock()?;
             }
-            let status = store.vault_status();
+            let status = store.vault_status()?;
             out.value(&json!({"vault": status}), |v| {
                 v["vault"].as_str().unwrap_or("?").to_string()
             })

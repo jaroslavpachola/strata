@@ -180,6 +180,16 @@ provider is one more fetch command.
 
 *Gate: the CLI passes M3's script unchanged against a running server.*
 
+*As built (0.5):* one endpoint, `POST /v1/rpc`, takes a request tagged
+by `op` (the same operations as `strata_core::Api`, which both `Store`
+and `strata_server::Client` implement), and `GET /v1/events?type=T` is
+SSE. Errors cross as `{code, error}` and come back as the core's, so a
+locked vault is still exit 2. The CLI uses a server when
+`$STRATA_SOCKET` names one, or when the default socket's server holds
+the same directory. `-u` stays per command even then, locking again
+after if the vault was locked; `strata vault unlock` is what keeps a
+server unlocked, and `strata watch` prints the event stream.
+
 ### M6 - Export
 
 - `strata export` writes each open type as a markdown table plus a JSON
