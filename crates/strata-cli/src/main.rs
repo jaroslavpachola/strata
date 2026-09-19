@@ -15,7 +15,9 @@ use std::process::ExitCode;
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
-use strata_core::{Kind, Partition, PropertyDef, Query, Sort, Store, TypeDef, Uuid, Values};
+use strata_core::{
+    Kind, Partition, PropertyDef, Query, Sort, Store, TypeDef, Uuid, Values, VaultStatus,
+};
 
 use crate::config::Config;
 use crate::output::Out;
@@ -43,7 +45,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Create the store, and its vault unless --no-vault
+    /// Create the store and its vault (unless --no-vault), and declare
+    /// the seed types it lacks: Task, PortfolioSnapshot
     Init {
         #[arg(long)]
         no_vault: bool,
@@ -88,8 +91,9 @@ enum TypeCmd {
     /// {"name", "partition", "description", "properties": [{"name", "kind", "required"}]}
     Add {
         name: Option<String>,
-        /// NAME:KIND, with a trailing ! for required. Kinds: text, number,
-        /// date, bool, json, ref
+        /// NAME:KIND[!][=A|B|C]: ! for required, =A|B|C for the only
+        /// values a text property takes. Kinds: text, number, date, bool,
+        /// json, ref
         #[arg(short, long = "prop", value_name = "NAME:KIND[!]")]
         props: Vec<String>,
         /// Keep its items in the vault
@@ -120,7 +124,7 @@ enum TypeCmd {
 
 #[derive(Subcommand)]
 enum PropCmd {
-    /// Add NAME:KIND[!] at the end
+    /// Add NAME:KIND[!][=A|B|C] at the end
     Add {
         spec: String,
     },
@@ -137,6 +141,11 @@ enum PropCmd {
     },
     Optional {
         name: String,
+    },
+    /// Close a text property to A|B|C, or open it again with no CHOICES
+    Choices {
+        name: String,
+        choices: Option<String>,
     },
 }
 
@@ -216,16 +225,39 @@ fn run(cli: Cli, out: &Out) -> anyhow::Result<()> {
 
     if let Command::Init { no_vault } = cli.command {
         let mut store = Store::open(&dir)?;
-        if !no_vault && store.vault_status() == strata_core::VaultStatus::Absent {
-            store.vault_create(&config.passphrase(true)?)?;
+        if !no_vault {
+            match store.vault_status() {
+                VaultStatus::Absent => store.vault_create(&config.passphrase(true)?)?,
+                VaultStatus::Locked if store.seed_needs_vault()? => {
+                    store.vault_unlock(&config.passphrase(false)?)?
+                }
+                _ => {}
+            }
         }
-        return out.value(&json!({"dir": dir, "vault": store.vault_status()}), |v| {
-            format!(
-                "{}  vault {}",
-                dir.display(),
-                v["vault"].as_str().unwrap_or("?")
-            )
-        });
+        let seeded = store.seed()?;
+        let vault = store.vault_status();
+        return out.value(
+            &json!({"dir": dir, "vault": vault, "added": seeded.added, "skipped": seeded.skipped}),
+            |v| {
+                let mut s = format!(
+                    "{}  vault {}",
+                    dir.display(),
+                    v["vault"].as_str().unwrap_or("?")
+                );
+                for (label, key) in [("declared", "added"), ("skipped, vault locked", "skipped")] {
+                    let names: Vec<_> = v[key]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .collect();
+                    if !names.is_empty() {
+                        s.push_str(&format!("\n{label}: {}", names.join(", ")));
+                    }
+                }
+                s
+            },
+        );
     }
 
     if !dir.join("open.db").exists() {
@@ -295,6 +327,11 @@ fn run(cli: Cli, out: &Out) -> anyhow::Result<()> {
                     }
                     PropCmd::Require { name } => store.set_required(&type_name, &name, true)?,
                     PropCmd::Optional { name } => store.set_required(&type_name, &name, false)?,
+                    PropCmd::Choices { name, choices } => store.set_choices(
+                        &type_name,
+                        &name,
+                        choices.as_deref().map(parse_choices),
+                    )?,
                 }
                 out.types(&[store.get_type(&type_name)?])
             }
@@ -400,11 +437,16 @@ fn run(cli: Cli, out: &Out) -> anyhow::Result<()> {
     }
 }
 
-/// NAME:KIND, a trailing ! for required.
+/// NAME:KIND, a ! after the kind for required, and =A|B|C for a text
+/// property's choices: `status:text!=todo|doing|done`.
 fn parse_prop(spec: &str) -> anyhow::Result<PropertyDef> {
-    let (name, kind) = spec
+    let (name, rest) = spec
         .split_once(':')
         .with_context(|| format!("{spec:?}: expected NAME:KIND"))?;
+    let (kind, choices) = match rest.split_once('=') {
+        Some((kind, choices)) => (kind, Some(parse_choices(choices))),
+        None => (rest, None),
+    };
     let (kind, required) = match kind.strip_suffix('!') {
         Some(k) => (k, true),
         None => (kind, false),
@@ -413,8 +455,14 @@ fn parse_prop(spec: &str) -> anyhow::Result<PropertyDef> {
         serde_json::from_value(Value::String(kind.to_string())).with_context(|| {
             format!("{spec:?}: {kind:?} is not a kind: text, number, date, bool, json or ref")
         })?;
-    let p = PropertyDef::new(name, kind);
-    Ok(if required { p.required() } else { p })
+    let mut p = PropertyDef::new(name, kind);
+    p.required = required;
+    p.choices = choices;
+    Ok(p)
+}
+
+fn parse_choices(s: &str) -> Vec<String> {
+    s.split('|').map(str::to_string).collect()
 }
 
 fn parse_partition(s: &str) -> Result<Partition, String> {

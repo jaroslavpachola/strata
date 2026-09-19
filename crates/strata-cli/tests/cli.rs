@@ -235,13 +235,12 @@ fn vault_status_and_init_are_idempotent() {
 #[test]
 fn a_batch_add_is_all_or_nothing() {
     let env = Env::new();
-    env.ok(&["type", "add", "Task", "-p", "title:text!"], None);
     let err = env.fails(
         1,
         &["item", "add", "Task"],
-        Some(json!([{"title": "one"}, {"title": 2}])),
+        Some(json!([{"title": "one", "status": "todo"}, {"title": "two", "status": "later"}])),
     );
-    assert!(err["error"].as_str().unwrap().contains("title"));
+    assert!(err["error"].as_str().unwrap().contains("status"));
     assert_eq!(env.ok(&["query", "-t", "Task"], None), json!([]));
 }
 
@@ -283,7 +282,8 @@ fn types_come_from_flags_or_stdin() {
         &["type", "add", "-p", "x:text"],
         Some(json!({"name": "X"})),
     );
-    assert_eq!(env.ok(&["type", "list"], None).as_array().unwrap().len(), 1);
+    // Bookmark and the two seed types
+    assert_eq!(env.ok(&["type", "list"], None).as_array().unwrap().len(), 3);
 }
 
 #[test]
@@ -311,8 +311,10 @@ fn where_values_read_as_json_when_they_parse() {
 fn items_update_delete_and_relate() {
     let env = Env::new();
     let account = with_account(&env);
-    env.ok(&["type", "add", "Task", "-p", "title:text!"], None);
-    let task = env.ok(&["item", "add", "Task"], Some(json!({"title": "check"})));
+    let task = env.ok(
+        &["item", "add", "Task"],
+        Some(json!({"title": "check", "status": "todo"})),
+    );
     let task = task["id"].as_str().unwrap();
 
     let rels = env.ok(&["item", "relate", task, &account, "about"], None);
@@ -343,4 +345,136 @@ fn items_update_delete_and_relate() {
     );
     env.fails(1, &["item", "get", task], None);
     env.fails(1, &["item", "update", &account], Some(json!([1])));
+}
+
+#[test]
+fn init_declares_the_seed_types_once() {
+    let bare = Env {
+        dir: tempfile::tempdir().unwrap(),
+        config: None,
+        passphrase: Some(PASS),
+    };
+    let first = bare.ok(&["init", "--no-vault"], None);
+    assert_eq!(first["added"], json!(["Task"]));
+    assert_eq!(first["skipped"], json!(["PortfolioSnapshot"]));
+
+    // the second run creates the vault and finishes the job
+    let second = bare.ok(&["init"], None);
+    assert_eq!(second["added"], json!(["PortfolioSnapshot"]));
+    let third = bare.ok(&["init"], None);
+    assert_eq!(third["added"], json!([]));
+    assert_eq!(third["vault"], "locked", "nothing to seed, so no unlock");
+
+    let task = bare.ok(&["type", "show", "Task"], None);
+    assert_eq!(
+        task[0]["properties"][1],
+        json!({"name": "status", "kind": "text", "required": true, "choices": ["todo", "doing", "done"]})
+    );
+    let snapshot = bare.ok(&["type", "show", "PortfolioSnapshot"], None);
+    assert_eq!(snapshot[0]["partition"], "vault");
+}
+
+#[test]
+fn choices_come_from_the_spec_and_the_prop_command() {
+    let env = Env::new();
+    let def = env.ok(
+        &[
+            "type",
+            "add",
+            "Bug",
+            "-p",
+            "state:text!=open|closed",
+            "-p",
+            "title:text",
+        ],
+        None,
+    );
+    assert_eq!(
+        def[0]["properties"][0]["choices"],
+        json!(["open", "closed"])
+    );
+    assert_eq!(def[0]["properties"][0]["required"], true);
+    env.fails(
+        1,
+        &["item", "add", "Bug"],
+        Some(json!({"state": "wontfix"})),
+    );
+
+    env.ok(
+        &[
+            "type",
+            "prop",
+            "Bug",
+            "choices",
+            "state",
+            "open|closed|wontfix",
+        ],
+        None,
+    );
+    env.ok(&["item", "add", "Bug"], Some(json!({"state": "wontfix"})));
+    env.fails(
+        1,
+        &["type", "prop", "Bug", "choices", "state", "open"],
+        None,
+    );
+    let opened = env.ok(&["type", "prop", "Bug", "choices", "state"], None);
+    assert!(opened[0]["properties"][0].get("choices").is_none());
+}
+
+/// The M4 gate: a snapshot is in the vault, put there by the script, and
+/// `strata query --type PortfolioSnapshot` shows it only after unlock.
+#[test]
+fn the_portfolio_script_writes_a_snapshot_into_the_vault() {
+    let env = Env::new();
+    let barbero = env.dir.path().join("fake-barbero");
+    std::fs::write(
+        &barbero,
+        "#!/bin/sh\n[ \"$1 $2\" = 'get portfolio/api' ] || exit 3\necho 'the-api-key'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        &barbero,
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    let config = env.dir.path().join("config.toml");
+    std::fs::write(&config, "").unwrap();
+
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/portfolio-snapshot");
+    let out = Command::new(script)
+        .env("STRATA", BIN)
+        .env("BARBERO", &barbero)
+        .env("STRATA_DIR", env.dir.path().join("store"))
+        .env("STRATA_CONFIG", &config)
+        .env("STRATA_VAULT_PASSPHRASE", PASS)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // it says which snapshot, and nothing of what is in it
+    let id = stdout.trim().strip_prefix("snapshot ").unwrap().to_string();
+    for secret in ["the-api-key", "VWCE", "EUR", "5107"] {
+        assert!(!stdout.contains(secret), "{secret} in the script's output");
+    }
+
+    let locked = env.ok(&["query", "--type", "PortfolioSnapshot"], None);
+    assert_eq!(
+        locked,
+        json!([{"id": id, "type": "PortfolioSnapshot", "locked": true}])
+    );
+
+    let open = env.ok(&["-u", "query", "--type", "PortfolioSnapshot"], None);
+    let snapshot = &open[0];
+    assert_eq!(snapshot["id"], id.as_str());
+    assert_eq!(snapshot["author"], "portfolio-snapshot");
+    assert_eq!(snapshot["values"]["currency"], "EUR");
+    assert_eq!(snapshot["values"]["total"], 5107.91);
+    let positions = snapshot["values"]["positions"].as_array().unwrap();
+    assert_eq!(positions.len(), 3);
+    assert_eq!(positions[2]["value"], 2003.57);
 }

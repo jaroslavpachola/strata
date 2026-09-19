@@ -122,6 +122,9 @@ pub struct PropertyDef {
     pub kind: Kind,
     #[serde(default)]
     pub required: bool,
+    /// For a text property: the only values it may take.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choices: Option<Vec<String>>,
 }
 
 impl PropertyDef {
@@ -130,12 +133,35 @@ impl PropertyDef {
             name: name.into(),
             kind,
             required: false,
+            choices: None,
         }
     }
 
     pub fn required(mut self) -> Self {
         self.required = true;
         self
+    }
+
+    pub fn choices<S: Into<String>>(mut self, choices: impl IntoIterator<Item = S>) -> Self {
+        self.choices = Some(choices.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Choices only on text, and at least one of them.
+    pub(crate) fn check_choices(&self) -> Result<()> {
+        match &self.choices {
+            None => Ok(()),
+            Some(c) if self.kind == Kind::Text && !c.is_empty() => Ok(()),
+            Some(_) => Err(Error::BadChoices(self.name.clone())),
+        }
+    }
+
+    /// Whether `value` (already of the right kind) is one of the choices.
+    pub(crate) fn allows(&self, value: &Value) -> bool {
+        match (&self.choices, value.as_str()) {
+            (Some(c), Some(s)) => c.iter().any(|x| x == s),
+            _ => true,
+        }
     }
 }
 

@@ -212,6 +212,7 @@ impl Store {
         check_name(&def.name)?;
         for (i, p) in def.properties.iter().enumerate() {
             check_property_name(&p.name)?;
+            p.check_choices()?;
             if def.properties[..i].iter().any(|q| q.name == p.name) {
                 return Err(Error::PropertyExists {
                     type_name: def.name.clone(),
@@ -268,7 +269,8 @@ impl Store {
             .optional()?
             .ok_or_else(|| Error::UnknownType(name.to_string()))?;
         let mut stmt = self.conn.prepare_cached(
-            "SELECT name, kind, required FROM main.property WHERE type = ?1 ORDER BY position",
+            "SELECT name, kind, required, choices FROM main.property
+             WHERE type = ?1 ORDER BY position",
         )?;
         let properties = stmt
             .query_map([name], |r| {
@@ -276,14 +278,20 @@ impl Store {
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
                     r.get::<_, bool>(2)?,
+                    r.get::<_, Option<String>>(3)?,
                 ))
             })?
             .map(|row| {
-                let (name, kind, required) = row?;
+                let (name, kind, required, choices) = row?;
+                let choices = choices
+                    .map(|c| serde_json::from_str(&c))
+                    .transpose()
+                    .map_err(|e| Error::Corrupt(format!("choices of {name}: {e}")))?;
                 Ok(PropertyDef {
                     name,
                     kind: Kind::parse(&kind)?,
                     required,
+                    choices,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -312,6 +320,7 @@ impl Store {
     /// refused while the type has items, since none of them has it.
     pub fn add_property(&self, type_name: &str, property: &PropertyDef) -> Result<()> {
         check_property_name(&property.name)?;
+        property.check_choices()?;
         let def = self.get_type(type_name)?;
         let catalogues = self.catalogues(def.partition)?;
         if def.get(&property.name).is_some() {
@@ -431,6 +440,52 @@ impl Store {
             tx.execute(
                 &format!("UPDATE {db}.property SET required = ?3 WHERE type = ?1 AND name = ?2"),
                 params![type_name, property, required],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Close a text property to `choices`, or open it again with `None`.
+    /// Refused while any item holds a value outside them.
+    pub fn set_choices(
+        &self,
+        type_name: &str,
+        property: &str,
+        choices: Option<Vec<String>>,
+    ) -> Result<()> {
+        let def = self.get_type(type_name)?;
+        let catalogues = self.catalogues(def.partition)?;
+        let mut p = def
+            .get(property)
+            .cloned()
+            .ok_or_else(|| unknown_property(type_name, property))?;
+        p.choices = choices;
+        p.check_choices()?;
+        let json = choices_json(&p.choices);
+        if let Some(json) = &json {
+            let data = def.partition.schema();
+            let count: i64 = self.conn.query_row(
+                &format!(
+                    "SELECT count(*) FROM {data}.value v JOIN {data}.item i ON v.item = i.id
+                     WHERE i.type = ?1 AND v.property = ?2
+                       AND json_extract(v.value, '$') NOT IN (SELECT value FROM json_each(?3))"
+                ),
+                params![type_name, property, json],
+                |r| r.get(0),
+            )?;
+            if count > 0 {
+                return Err(Error::ChoicesUnmet {
+                    property: property.to_string(),
+                    count,
+                });
+            }
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        for db in catalogues {
+            tx.execute(
+                &format!("UPDATE {db}.property SET choices = ?3 WHERE type = ?1 AND name = ?2"),
+                params![type_name, property, json],
             )?;
         }
         tx.commit()?;
@@ -756,18 +811,23 @@ fn insert_property(
 ) -> Result<()> {
     conn.execute(
         &format!(
-            "INSERT INTO {db}.property (type, name, kind, required, position)
-             VALUES (?1, ?2, ?3, ?4, ?5)"
+            "INSERT INTO {db}.property (type, name, kind, required, position, choices)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
         ),
         params![
             type_name,
             p.name,
             p.kind.as_str(),
             p.required,
-            position as i64
+            position as i64,
+            choices_json(&p.choices),
         ],
     )?;
     Ok(())
+}
+
+fn choices_json(choices: &Option<Vec<String>>) -> Option<String> {
+    choices.as_ref().map(|c| serde_json::json!(c).to_string())
 }
 
 fn put_value(conn: &Connection, db: &str, id: Uuid, property: &str, value: &Value) -> Result<()> {
@@ -795,6 +855,13 @@ fn validate(def: &TypeDef, values: Values) -> Result<Values> {
             return Err(Error::InvalidValue {
                 property,
                 reason,
+                value,
+            });
+        }
+        if !p.allows(&value) {
+            return Err(Error::NotAChoice {
+                property,
+                choices: p.choices.clone().unwrap_or_default(),
                 value,
             });
         }

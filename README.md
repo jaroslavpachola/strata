@@ -9,17 +9,19 @@ See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
 
 ## Status
 
-**M3 (0.3).** The core library and the `strata` CLI work: types, items,
+**M4 (0.4).** The core library and the `strata` CLI work: types, items,
 relations and queries over two SQLite files, `open.db` in the clear and
 `vault.db` under SQLCipher. While the vault is locked its items show only
 as `{id, type, locked}` placeholders and every write to it is refused.
-No server yet, so the vault is unlocked per command.
+No server yet, so the vault is unlocked per command. `strata init` seeds
+a Task type (open) and a PortfolioSnapshot type (vault), and
+`scripts/portfolio-snapshot` fills the latter from a stand-in provider.
 
 ## Using it
 
-    strata init                          # the store, and a vault (asks for a passphrase)
-    strata type add Task -p title:text! -p status:text! -p due:date
-    echo '{"title": "write M4", "status": "todo"}' | strata item add Task
+    strata init                          # the store, a vault, the seed types
+    echo '{"title": "write M5", "status": "todo"}' | strata item add Task
+    strata type add Bug -p title:text! -p 'state:text!=open|closed'   # ! required, =A|B choices
     strata query -t Task -w status=todo --sort due
     strata -u type add Account --vault -p name:text! -p iban:text
     strata -u query -t Account           # without -u: placeholders only
@@ -34,6 +36,12 @@ Barbero when `~/.config/strata/config.toml` says so, else a prompt:
     barbero_entry = "strata/vault"
 
 Every write records an author: `--author`, `$STRATA_AUTHOR`, or `$USER`.
+
+`scripts/portfolio-snapshot` takes a portfolio snapshot into the vault:
+the API key comes from Barbero (`PORTFOLIO_KEY`, default `portfolio/api`)
+and goes straight into the fetch command's stdin; the script prints only
+the new snapshot's id. The fetch is a stand-in until a provider is wired
+in: see the script's header for the contract.
 
 ## Layout, once it exists
 

@@ -156,6 +156,16 @@ get` on a locked item exits 2. The gate is
 *Gate: a snapshot is in the vault, put there by the script, and `strata
 query --type PortfolioSnapshot` shows it only after unlock.*
 
+*As built (0.4):* the status enum needed a closed set of values, so text
+properties gained `choices` (migration 3; `status:text!=todo|doing|done`
+on the CLI, `type prop T choices`). `strata init` seeds what is missing
+and leaves an existing type alone, unlocking only when a vault seed type
+is missing. The provider is a stand-in for now:
+`scripts/portfolio-snapshot` runs a fetch command (`PORTFOLIO_FETCH`,
+default `scripts/fetch-stand-in`) that reads the API key on stdin and
+prints `{currency, positions: [{symbol, quantity, price}]}`; a real
+provider is one more fetch command.
+
 ### M5 - The server
 
 - `crates/strata-server`: axum over a Unix socket at

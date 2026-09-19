@@ -8,11 +8,13 @@ mod error;
 mod model;
 mod query;
 mod schema;
+mod seed;
 mod store;
 
 pub use cipher::open_encrypted;
 pub use error::{Error, Result};
 pub use model::{Entry, Item, Kind, Locked, Partition, PropertyDef, TypeDef, Values, VaultStatus};
 pub use query::{Query, Sort};
+pub use seed::{Seeded, seed_types};
 pub use store::{Relation, Store};
 pub use uuid::Uuid;

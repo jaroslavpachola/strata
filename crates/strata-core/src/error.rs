@@ -38,6 +38,16 @@ pub enum Error {
     MissingRequired { property: String },
     #[error("{property} cannot become required: {count} item(s) have no value for it")]
     RequiredUnmet { property: String, count: i64 },
+    #[error("{0}: choices need a text property and at least one choice")]
+    BadChoices(String),
+    #[error("{property} is not one of {choices:?}, got {value}")]
+    NotAChoice {
+        property: String,
+        choices: Vec<String>,
+        value: serde_json::Value,
+    },
+    #[error("{property} cannot take those choices: {count} item(s) hold another value")]
+    ChoicesUnmet { property: String, count: i64 },
     #[error("every write needs an author")]
     NoAuthor,
     #[error("the database holds something strata did not write: {0}")]

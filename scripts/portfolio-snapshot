@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Take a snapshot of a portfolio and keep it in the strata vault.
+#
+# The layered model end to end: the API key lives in Barbero, the result
+# in strata's vault, and neither passes through this script's arguments,
+# environment or output. It prints the new snapshot's id and nothing of
+# its contents.
+#
+#   PORTFOLIO_FETCH   the command that talks to the provider
+#                     [default: scripts/fetch-stand-in, fixed data]
+#   PORTFOLIO_KEY     the Barbero entry holding the API key [portfolio/api]
+#   BARBERO           the Barbero CLI [barbero-cli]
+#   STRATA            the strata CLI [strata]
+#
+# A fetch command reads the API key on stdin and prints
+#   {"currency": "EUR", "positions": [{"symbol", "quantity", "price"}]}
+# on stdout; this script works out each value and the total.
+#
+# The vault passphrase comes from strata's own cascade: the environment,
+# Barbero if configured, or a prompt.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fetch="${PORTFOLIO_FETCH:-$here/fetch-stand-in}"
+entry="${PORTFOLIO_KEY:-portfolio/api}"
+barbero="${BARBERO:-barbero-cli}"
+strata="${STRATA:-strata}"
+
+# the key goes from Barbero's stdout straight into the fetch's stdin
+raw="$("$barbero" get "$entry" | "$fetch")"
+
+snapshot="$(jq --arg taken_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
+    def round2: . * 100 | round / 100;
+    (.positions | map(. + {value: (.quantity * .price | round2)})) as $positions
+    | {
+        taken_at: $taken_at,
+        currency: .currency,
+        total: ($positions | map(.value) | add // 0 | round2),
+        positions: $positions
+      }' <<<"$raw")"
+
+id="$(printf '%s' "$snapshot" \
+    | "$strata" --unlock --author portfolio-snapshot --json item add PortfolioSnapshot \
+    | jq -r .id)"
+echo "snapshot $id"

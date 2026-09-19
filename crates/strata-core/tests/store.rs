@@ -36,6 +36,7 @@ both_partitions!(
     properties_change_at_runtime,
     types_are_listed_and_unique,
     a_store_on_disk_survives_reopening,
+    choices_close_a_text_property,
 );
 
 fn values(v: serde_json::Value) -> Values {
@@ -366,4 +367,68 @@ fn a_store_on_disk_survives_reopening(p: Partition) {
     }
     assert_eq!(store.get_item(id).unwrap().values["title"], "persist");
     assert_eq!(store.query(&Query::new("Task")).unwrap().len(), 6);
+}
+
+fn choices_close_a_text_property(p: Partition) {
+    let (_dir, store) = store_with_tasks(p);
+    // one task is "doing", which a narrower set would leave out
+    assert!(matches!(
+        store.set_choices("Task", "status", Some(vec!["todo".into(), "done".into()])),
+        Err(Error::ChoicesUnmet { count: 1, .. })
+    ));
+    let three = vec!["todo".into(), "doing".into(), "done".into()];
+    store
+        .set_choices("Task", "status", Some(three.clone()))
+        .unwrap();
+    assert_eq!(
+        store
+            .get_type("Task")
+            .unwrap()
+            .get("status")
+            .unwrap()
+            .choices,
+        Some(three)
+    );
+
+    let err = store
+        .add_item(
+            "Task",
+            values(json!({"title": "x", "status": "someday"})),
+            "jarda",
+        )
+        .unwrap_err();
+    assert!(matches!(err, Error::NotAChoice { .. }), "{err:?}");
+    let id = query(&store, Query::new("Task"))[0].id;
+    assert!(matches!(
+        store.update_item(id, values(json!({"status": "later"})), "jarda"),
+        Err(Error::NotAChoice { .. })
+    ));
+    store
+        .update_item(id, values(json!({"status": "done"})), "jarda")
+        .unwrap();
+
+    assert!(matches!(
+        store.set_choices("Task", "estimate", Some(vec!["1".into()])),
+        Err(Error::BadChoices(_))
+    ));
+    assert!(matches!(
+        store.set_choices("Task", "status", Some(vec![])),
+        Err(Error::BadChoices(_))
+    ));
+    assert!(matches!(
+        store.add_property(
+            "Task",
+            &PropertyDef::new("size", Kind::Number).choices(["s"])
+        ),
+        Err(Error::BadChoices(_))
+    ));
+
+    store.set_choices("Task", "status", None).unwrap();
+    store
+        .add_item(
+            "Task",
+            values(json!({"title": "x", "status": "someday"})),
+            "jarda",
+        )
+        .unwrap();
 }

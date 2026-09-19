@@ -62,6 +62,10 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX {db}.vault_index_type ON vault_index(type);
     ",
+    // 3: a closed set of values for a text property, as a JSON array
+    "
+    ALTER TABLE {db}.property ADD COLUMN choices TEXT;
+    ",
 ];
 
 /// Bring schema `db` (`main` or `vault`) of `conn` up to date.

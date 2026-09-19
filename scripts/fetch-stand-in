@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# A stand-in provider for portfolio-snapshot: fixed positions, so the
+# pipeline runs before a real one is wired in. Like a real fetch it reads
+# the API key on stdin, and refuses to answer without one.
+set -euo pipefail
+
+read -r key || true
+[ -n "${key:-}" ] || { echo "fetch-stand-in: no API key on stdin" >&2; exit 1; }
+
+cat <<'JSON'
+{
+  "currency": "EUR",
+  "positions": [
+    {"symbol": "VWCE", "quantity": 12, "price": 118.42},
+    {"symbol": "CSPX", "quantity": 3, "price": 561.1},
+    {"symbol": "IWDA", "quantity": 20.5, "price": 97.735}
+  ]
+}
+JSON
