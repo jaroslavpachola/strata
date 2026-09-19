@@ -530,7 +530,7 @@ dependencies = [
 
 [[package]]
 name = "strata-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -539,7 +539,7 @@ dependencies = [
 
 [[package]]
 name = "strata-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "rusqlite",

@@ -1,13 +1,51 @@
+//! The store's behaviour, run once with the Task type in the open
+//! partition and once with it in the vault: the M2 gate says the two must
+//! not differ while the vault is unlocked.
+
 use serde_json::json;
-use strata_core::{Error, Kind, PropertyDef, Query, Store, TypeDef, Uuid, Values};
+use strata_core::{
+    Entry, Error, Item, Kind, Partition, PropertyDef, Query, Store, TypeDef, Uuid, Values,
+};
+use tempfile::TempDir;
+
+/// `name` becomes a module with an `open` and a `vault` test, each
+/// calling the function `name` with that partition.
+macro_rules! both_partitions {
+    ($($name:ident),* $(,)?) => {$(
+        mod $name {
+            #[test]
+            fn open() {
+                super::$name(strata_core::Partition::Open)
+            }
+            #[test]
+            fn vault() {
+                super::$name(strata_core::Partition::Vault)
+            }
+        }
+    )*};
+}
+
+both_partitions!(
+    task_type_declared_filled_and_queried,
+    query_filters_on_numbers_and_absence,
+    query_rejects_unknown_names,
+    values_are_checked_against_their_kind,
+    update_merges_and_null_removes,
+    delete_removes_the_item_and_its_relations,
+    relations_need_both_ends,
+    properties_change_at_runtime,
+    types_are_listed_and_unique,
+    a_store_on_disk_survives_reopening,
+);
 
 fn values(v: serde_json::Value) -> Values {
     v.as_object().unwrap().clone()
 }
 
-fn task_type() -> TypeDef {
+fn task_type(partition: Partition) -> TypeDef {
     TypeDef::new("Task")
         .description("something to do")
+        .partition(partition)
         .property(PropertyDef::new("title", Kind::Text).required())
         .property(PropertyDef::new("status", Kind::Text).required())
         .property(PropertyDef::new("due", Kind::Date))
@@ -15,9 +53,17 @@ fn task_type() -> TypeDef {
         .property(PropertyDef::new("note", Kind::Text))
 }
 
-fn store_with_tasks() -> Store {
-    let store = Store::open_in_memory().unwrap();
-    store.add_type(&task_type()).unwrap();
+/// A store on disk with an unlocked vault and nothing in it.
+fn empty_store() -> (TempDir, Store) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path()).unwrap();
+    store.vault_create("correct horse").unwrap();
+    (dir, store)
+}
+
+fn store_with_tasks(partition: Partition) -> (TempDir, Store) {
+    let (dir, store) = empty_store();
+    store.add_type(&task_type(partition)).unwrap();
     for (title, status, due, estimate) in [
         ("write M1", "doing", Some("2026-09-20"), Some(3)),
         ("tag M0", "done", Some("2026-09-19"), Some(1)),
@@ -33,10 +79,21 @@ fn store_with_tasks() -> Store {
             )
             .unwrap();
     }
-    store
+    (dir, store)
 }
 
-fn titles(items: &[strata_core::Item]) -> Vec<&str> {
+fn items(entries: Vec<Entry>) -> Vec<Item> {
+    entries
+        .into_iter()
+        .map(|e| e.into_item().expect("an item, not a placeholder"))
+        .collect()
+}
+
+fn query(store: &Store, q: Query) -> Vec<Item> {
+    items(store.query(&q).unwrap())
+}
+
+fn titles(items: &[Item]) -> Vec<&str> {
     items
         .iter()
         .map(|i| i.values["title"].as_str().unwrap())
@@ -44,28 +101,29 @@ fn titles(items: &[strata_core::Item]) -> Vec<&str> {
 }
 
 /// The M1 gate: a Task type can be declared, filled and queried.
-#[test]
-fn task_type_declared_filled_and_queried() {
-    let store = store_with_tasks();
+fn task_type_declared_filled_and_queried(p: Partition) {
+    let (_dir, store) = store_with_tasks(p);
 
     let def = store.get_type("Task").unwrap();
-    assert_eq!(def, task_type());
+    assert_eq!(def, task_type(p));
 
-    let todo = store
-        .query(&Query::new("Task").filter("status", "todo").sort_by("due"))
-        .unwrap();
+    let todo = query(
+        &store,
+        Query::new("Task").filter("status", "todo").sort_by("due"),
+    );
     // no due date sorts last
     assert_eq!(
         titles(&todo),
         ["plan M2", "sketch the TUI", "read SQLCipher docs"]
     );
 
-    let by_estimate = store
-        .query(&Query::new("Task").sort_by("estimate").descending().limit(2))
-        .unwrap();
+    let by_estimate = query(
+        &store,
+        Query::new("Task").sort_by("estimate").descending().limit(2),
+    );
     assert_eq!(titles(&by_estimate), ["sketch the TUI", "write M1"]);
 
-    let page = store.query(&Query::new("Task").limit(2).offset(1)).unwrap();
+    let page = query(&store, Query::new("Task").limit(2).offset(1));
     assert_eq!(titles(&page), ["tag M0", "plan M2"]);
 
     let first = &todo[0];
@@ -74,30 +132,26 @@ fn task_type_declared_filled_and_queried() {
     assert!(first.values.get("estimate").is_none(), "null is no value");
 }
 
-#[test]
-fn query_filters_on_numbers_and_absence() {
-    let store = store_with_tasks();
-    let three = store
-        .query(&Query::new("Task").filter("estimate", 3.0))
-        .unwrap();
+fn query_filters_on_numbers_and_absence(p: Partition) {
+    let (_dir, store) = store_with_tasks(p);
+    let three = query(&store, Query::new("Task").filter("estimate", 3.0));
     assert_eq!(titles(&three), ["write M1"]);
-    let undated = store
-        .query(&Query::new("Task").filter("due", serde_json::Value::Null))
-        .unwrap();
+    let undated = query(
+        &store,
+        Query::new("Task").filter("due", serde_json::Value::Null),
+    );
     assert_eq!(titles(&undated), ["read SQLCipher docs"]);
-    let none = store
-        .query(
-            &Query::new("Task")
-                .filter("status", "todo")
-                .filter("estimate", 1),
-        )
-        .unwrap();
+    let none = query(
+        &store,
+        Query::new("Task")
+            .filter("status", "todo")
+            .filter("estimate", 1),
+    );
     assert!(none.is_empty());
 }
 
-#[test]
-fn query_rejects_unknown_names() {
-    let store = store_with_tasks();
+fn query_rejects_unknown_names(p: Partition) {
+    let (_dir, store) = store_with_tasks(p);
     assert!(matches!(
         store.query(&Query::new("Nope")),
         Err(Error::UnknownType(_))
@@ -112,9 +166,8 @@ fn query_rejects_unknown_names() {
     ));
 }
 
-#[test]
-fn values_are_checked_against_their_kind() {
-    let store = store_with_tasks();
+fn values_are_checked_against_their_kind(p: Partition) {
+    let (_dir, store) = store_with_tasks(p);
     let err = store
         .add_item(
             "Task",
@@ -144,13 +197,9 @@ fn values_are_checked_against_their_kind() {
     assert!(matches!(err, Error::NoAuthor));
 }
 
-#[test]
-fn update_merges_and_null_removes() {
-    let store = store_with_tasks();
-    let item = store
-        .query(&Query::new("Task").filter("title", "write M1"))
-        .unwrap()
-        .remove(0);
+fn update_merges_and_null_removes(p: Partition) {
+    let (_dir, store) = store_with_tasks(p);
+    let item = query(&store, Query::new("Task").filter("title", "write M1")).remove(0);
 
     let updated = store
         .update_item(
@@ -179,10 +228,9 @@ fn update_merges_and_null_removes() {
     assert_eq!(store.get_item(item.id).unwrap(), updated);
 }
 
-#[test]
-fn delete_removes_the_item_and_its_relations() {
-    let store = store_with_tasks();
-    let all = store.query(&Query::new("Task")).unwrap();
+fn delete_removes_the_item_and_its_relations(p: Partition) {
+    let (_dir, store) = store_with_tasks(p);
+    let all = query(&store, Query::new("Task"));
     let (a, b) = (all[0].id, all[1].id);
     store.relate(a, b, "blocks").unwrap();
     store.relate(a, b, "blocks").unwrap(); // idempotent
@@ -195,26 +243,29 @@ fn delete_removes_the_item_and_its_relations() {
     assert_eq!(store.query(&Query::new("Task")).unwrap().len(), 4);
 }
 
-#[test]
-fn relations_accept_a_target_the_store_cannot_see() {
-    let store = store_with_tasks();
-    let a = store.query(&Query::new("Task")).unwrap()[0].id;
-    let elsewhere = Uuid::now_v7();
-    store.relate(a, elsewhere, "about").unwrap();
+fn relations_need_both_ends(p: Partition) {
+    let (_dir, store) = store_with_tasks(p);
+    let all = query(&store, Query::new("Task"));
+    let (a, b) = (all[0].id, all[1].id);
+    store.relate(a, b, "about").unwrap();
     let rels = store.relations(a).unwrap();
     assert_eq!(rels.len(), 1);
-    assert_eq!(rels[0].target, elsewhere);
-    store.unrelate(a, elsewhere, "about").unwrap();
+    assert_eq!((rels[0].source, rels[0].target), (a, b));
+    assert_eq!(store.get(rels[0].target).unwrap().id(), b);
+    store.unrelate(a, b, "about").unwrap();
     assert!(store.relations(a).unwrap().is_empty());
     assert!(matches!(
         store.relate(Uuid::now_v7(), a, "about"),
         Err(Error::UnknownItem(_))
     ));
+    assert!(matches!(
+        store.relate(a, Uuid::now_v7(), "about"),
+        Err(Error::UnknownItem(_))
+    ));
 }
 
-#[test]
-fn properties_change_at_runtime() {
-    let store = store_with_tasks();
+fn properties_change_at_runtime(p: Partition) {
+    let (_dir, store) = store_with_tasks(p);
 
     store
         .add_property("Task", &PropertyDef::new("project", Kind::Text))
@@ -239,7 +290,7 @@ fn properties_change_at_runtime() {
         names,
         ["title", "status", "due", "hours", "note", "project"]
     );
-    let three = store.query(&Query::new("Task").filter("hours", 3)).unwrap();
+    let three = query(&store, Query::new("Task").filter("hours", 3));
     assert_eq!(titles(&three), ["write M1"]);
 
     assert!(matches!(
@@ -250,16 +301,19 @@ fn properties_change_at_runtime() {
     store.set_required("Task", "title", true).unwrap();
 
     store.remove_property("Task", "hours").unwrap();
-    let item = &store.query(&Query::new("Task")).unwrap()[0];
+    let item = &query(&store, Query::new("Task"))[0];
     assert!(item.values.get("hours").is_none());
     assert!(store.get_type("Task").unwrap().get("hours").is_none());
 }
 
-#[test]
-fn types_are_listed_and_unique() {
-    let store = store_with_tasks();
+fn types_are_listed_and_unique(p: Partition) {
+    let (_dir, store) = store_with_tasks(p);
     store
-        .add_type(&TypeDef::new("Bookmark").property(PropertyDef::new("url", Kind::Text)))
+        .add_type(
+            &TypeDef::new("Bookmark")
+                .partition(p)
+                .property(PropertyDef::new("url", Kind::Text)),
+        )
         .unwrap();
     let names: Vec<_> = store
         .list_types()
@@ -277,6 +331,7 @@ fn types_are_listed_and_unique() {
         Err(Error::InvalidName(_))
     ));
     let dup = TypeDef::new("Dup")
+        .partition(p)
         .property(PropertyDef::new("a", Kind::Text))
         .property(PropertyDef::new("a", Kind::Number));
     assert!(matches!(
@@ -293,22 +348,22 @@ fn types_are_listed_and_unique() {
     );
 }
 
-#[test]
-fn a_store_on_disk_survives_reopening() {
-    let dir = tempfile::tempdir().unwrap();
-    let id = {
-        let store = Store::open(dir.path()).unwrap();
-        store.add_type(&task_type()).unwrap();
-        store
-            .add_item(
-                "Task",
-                values(json!({"title": "persist", "status": "todo"})),
-                "jarda",
-            )
-            .unwrap()
-            .id
-    };
-    assert!(dir.path().join("open.db").exists());
-    let store = Store::open(dir.path()).unwrap();
+fn a_store_on_disk_survives_reopening(p: Partition) {
+    let (dir, store) = store_with_tasks(p);
+    let id = store
+        .add_item(
+            "Task",
+            values(json!({"title": "persist", "status": "todo"})),
+            "jarda",
+        )
+        .unwrap()
+        .id;
+    drop(store);
+    let mut store = Store::open(dir.path()).unwrap();
+    if p == Partition::Vault {
+        assert!(matches!(store.get_item(id), Err(Error::VaultLocked)));
+        store.vault_unlock("correct horse").unwrap();
+    }
     assert_eq!(store.get_item(id).unwrap().values["title"], "persist");
+    assert_eq!(store.query(&Query::new("Task")).unwrap().len(), 6);
 }

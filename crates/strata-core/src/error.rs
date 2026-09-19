@@ -8,8 +8,12 @@ pub enum Error {
     /// wrong key from a file that is not a database, so neither can we.
     #[error("wrong passphrase, or {0} is not a strata vault")]
     WrongPassphrase(PathBuf),
-    #[error("the vault partition is not available yet")]
-    VaultUnavailable,
+    #[error("the vault is locked")]
+    VaultLocked,
+    #[error("there is no vault yet: create one first")]
+    NoVault,
+    #[error("a vault already exists")]
+    VaultExists,
     #[error("no type named {0:?}")]
     UnknownType(String),
     #[error("type {0:?} already exists")]

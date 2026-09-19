@@ -12,7 +12,7 @@ mod store;
 
 pub use cipher::open_encrypted;
 pub use error::{Error, Result};
-pub use model::{Item, Kind, Partition, PropertyDef, TypeDef, Values};
+pub use model::{Entry, Item, Kind, Locked, Partition, PropertyDef, TypeDef, Values, VaultStatus};
 pub use query::{Query, Sort};
 pub use store::{Relation, Store};
 pub use uuid::Uuid;

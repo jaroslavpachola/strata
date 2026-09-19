@@ -9,10 +9,12 @@ See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
 
 ## Status
 
-**M1.** `strata-core` opens `open.db`, runs its migrations, and declares,
-fills and queries types through a Rust API; SQLCipher is built in and
-proven by a round-trip test, but the vault partition is M2. The `strata`
-binary parses `--version` and nothing else yet.
+**M2 (0.2).** `strata-core` is a working library: types, items,
+relations and queries over two SQLite files, `open.db` in the clear and
+`vault.db` under SQLCipher. The vault locks and unlocks at runtime; while
+locked, its items show only as `{id, type, locked}` placeholders and
+every write to it is refused. The `strata` binary parses `--version` and
+nothing else yet; the CLI is M3.
 
 ## Layout, once it exists
 

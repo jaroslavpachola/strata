@@ -33,6 +33,24 @@ impl Partition {
             _ => Partition::Open,
         }
     }
+
+    /// The schema the partition's tables sit in on the store's connection.
+    pub(crate) fn schema(self) -> &'static str {
+        match self {
+            Partition::Open => "main",
+            Partition::Vault => "vault",
+        }
+    }
+}
+
+/// Whether the vault can be read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VaultStatus {
+    /// No `vault.db` yet.
+    Absent,
+    Locked,
+    Unlocked,
 }
 
 /// What a property's value must be.
@@ -176,6 +194,56 @@ pub struct Item {
     /// Who wrote it last.
     pub modified_by: String,
     pub values: Values,
+}
+
+/// A vault item seen while the vault is locked: that it exists and what
+/// type it is, and nothing of its values, times or authors.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Locked {
+    pub id: Uuid,
+    #[serde(rename = "type")]
+    pub type_name: String,
+    /// Always true: marks the placeholder for a reader of the JSON.
+    pub locked: bool,
+}
+
+/// What a query or a relation yields: an item, or a placeholder for one
+/// in the locked vault.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Entry {
+    Item(Item),
+    Locked(Locked),
+}
+
+impl Entry {
+    pub fn id(&self) -> Uuid {
+        match self {
+            Entry::Item(item) => item.id,
+            Entry::Locked(locked) => locked.id,
+        }
+    }
+
+    pub fn type_name(&self) -> &str {
+        match self {
+            Entry::Item(item) => &item.type_name,
+            Entry::Locked(locked) => &locked.type_name,
+        }
+    }
+
+    pub fn item(&self) -> Option<&Item> {
+        match self {
+            Entry::Item(item) => Some(item),
+            Entry::Locked(_) => None,
+        }
+    }
+
+    pub fn into_item(self) -> Option<Item> {
+        match self {
+            Entry::Item(item) => Some(item),
+            Entry::Locked(_) => None,
+        }
+    }
 }
 
 /// Names the item's own fields take, kept off properties so a sort key

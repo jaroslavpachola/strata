@@ -108,6 +108,14 @@ sat unchanged for a while.
 *Gate: the same test suite passes with the Task type in either
 partition, and a locked store never leaks a vault value.*
 
+*As built (0.2):* the vault is attached to `open.db`'s connection with
+its key, so a move is one SQLite transaction; that takes the rollback
+journal rather than WAL, and `secure_delete` keeps moved values out of
+`open.db`'s free pages. `open.db` holds the whole type catalogue and a
+`vault_index` of id and type, which is exactly what a placeholder shows;
+vault types are mirrored into `vault.db` so it describes itself. A filter
+or a value sort on a locked type is refused rather than answered.
+
 ### M3 - The CLI
 
 - `strata type add|list|show|move`, `strata item add|get|update|delete`,

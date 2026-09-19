@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::model::{Item, Values};
+use crate::model::{Entry, Locked, Values};
 use crate::store::{Store, parse_id};
 use crate::{Error, Result};
 
@@ -79,7 +79,12 @@ impl Query {
 }
 
 impl Store {
-    pub fn query(&self, q: &Query) -> Result<Vec<Item>> {
+    /// Items of one type. A vault type queried while the vault is locked
+    /// yields a [`Locked`] placeholder per item, in creation order; a
+    /// filter or a sort that would need its values is
+    /// [`Error::VaultLocked`] instead, since answering it would say
+    /// something about them.
+    pub fn query(&self, q: &Query) -> Result<Vec<Entry>> {
         let def = self.get_type(&q.type_name)?;
         let known = |property: &str| {
             def.get(property)
@@ -89,62 +94,101 @@ impl Store {
                     property: property.to_string(),
                 })
         };
+        for property in q.filter.keys() {
+            known(property)?;
+        }
+        let sort = q.sort.clone().unwrap_or(Sort {
+            by: "created".into(),
+            descending: false,
+        });
+        if !matches!(sort.by.as_str(), "created" | "modified") {
+            known(&sort.by)?;
+        }
+        let dir = if sort.descending { "DESC" } else { "ASC" };
 
-        let mut sql = String::from("SELECT i.id FROM item i WHERE i.type = ?");
+        let db = match self.schema(def.partition) {
+            Err(Error::VaultLocked) => {
+                if !q.filter.is_empty() || sort.by != "created" {
+                    return Err(Error::VaultLocked);
+                }
+                return self.locked_placeholders(&def.name, dir, q);
+            }
+            other => other?,
+        };
+
+        let mut sql = format!("SELECT i.id FROM {db}.item i WHERE i.type = ?");
         let mut args: Vec<rusqlite::types::Value> = vec![q.type_name.clone().into()];
 
         for (property, value) in &q.filter {
-            known(property)?;
             args.push(property.clone().into());
             if value.is_null() {
-                sql.push_str(
-                    " AND NOT EXISTS (SELECT 1 FROM value v WHERE v.item = i.id AND v.property = ?)",
-                );
+                sql.push_str(&format!(
+                    " AND NOT EXISTS (SELECT 1 FROM {db}.value v
+                        WHERE v.item = i.id AND v.property = ?)"
+                ));
             } else {
                 // json_extract on both sides: 2 and 2.0 compare equal, and
                 // strings compare as strings rather than as quoted JSON
-                sql.push_str(
-                    " AND EXISTS (SELECT 1 FROM value v WHERE v.item = i.id AND v.property = ?
-                        AND json_extract(v.value, '$') = json_extract(?, '$'))",
-                );
+                sql.push_str(&format!(
+                    " AND EXISTS (SELECT 1 FROM {db}.value v WHERE v.item = i.id AND v.property = ?
+                        AND json_extract(v.value, '$') = json_extract(?, '$'))"
+                ));
                 args.push(value.to_string().into());
             }
         }
 
-        let (key, descending) = match &q.sort {
-            None => ("i.created".to_string(), false),
-            Some(s) => {
-                let key = match s.by.as_str() {
-                    "created" => "i.created".to_string(),
-                    "modified" => "i.modified".to_string(),
-                    property => {
-                        known(property)?;
-                        args.push(property.to_string().into());
-                        "(SELECT json_extract(v.value, '$') FROM value v
-                           WHERE v.item = i.id AND v.property = ?)"
-                            .to_string()
-                    }
-                };
-                (key, s.descending)
+        let key = match sort.by.as_str() {
+            "created" => "i.created".to_string(),
+            "modified" => "i.modified".to_string(),
+            property => {
+                args.push(property.to_string().into());
+                format!(
+                    "(SELECT json_extract(v.value, '$') FROM {db}.value v
+                       WHERE v.item = i.id AND v.property = ?)"
+                )
             }
         };
-        let dir = if descending { "DESC" } else { "ASC" };
         // the id breaks ties: UUIDv7, so that is creation order again
         sql.push_str(&format!(" ORDER BY {key} {dir} NULLS LAST, i.id {dir}"));
+        page(&mut sql, &mut args, q);
 
-        if q.limit.is_some() || q.offset.is_some() {
-            sql.push_str(" LIMIT ? OFFSET ?");
-            args.push(q.limit.map_or(-1, |n| n as i64).into());
-            args.push((q.offset.unwrap_or(0) as i64).into());
-        }
+        let ids = self.ids(&sql, args)?;
+        ids.into_iter()
+            .map(|id| self.read_item(db, id).map(Entry::Item))
+            .collect()
+    }
 
+    fn locked_placeholders(&self, type_name: &str, dir: &str, q: &Query) -> Result<Vec<Entry>> {
+        let mut sql = format!("SELECT id FROM main.vault_index WHERE type = ? ORDER BY id {dir}");
+        let mut args: Vec<rusqlite::types::Value> = vec![type_name.to_string().into()];
+        page(&mut sql, &mut args, q);
+        Ok(self
+            .ids(&sql, args)?
+            .into_iter()
+            .map(|id| {
+                Entry::Locked(Locked {
+                    id,
+                    type_name: type_name.to_string(),
+                    locked: true,
+                })
+            })
+            .collect())
+    }
+
+    fn ids(&self, sql: &str, args: Vec<rusqlite::types::Value>) -> Result<Vec<Uuid>> {
         let ids = self
-            .open
-            .prepare(&sql)?
+            .conn
+            .prepare(sql)?
             .query_map(rusqlite::params_from_iter(args), |r| r.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        ids.iter()
-            .map(|id| parse_id(id).and_then(|id: Uuid| self.get_item(id)))
-            .collect()
+        ids.iter().map(|id| parse_id(id)).collect()
+    }
+}
+
+fn page(sql: &mut String, args: &mut Vec<rusqlite::types::Value>, q: &Query) {
+    if q.limit.is_some() || q.offset.is_some() {
+        sql.push_str(" LIMIT ? OFFSET ?");
+        args.push(q.limit.map_or(-1, |n| n as i64).into());
+        args.push((q.offset.unwrap_or(0) as i64).into());
     }
 }
