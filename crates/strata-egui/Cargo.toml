@@ -1,0 +1,18 @@
+[package]
+name = "strata-egui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "egui widgets over the strata store: a table, a form, a kanban board, and a browser that puts them together."
+
+[dependencies]
+strata-core.workspace = true
+egui.workspace = true
+egui_extras.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+egui_kittest.workspace = true
+tempfile.workspace = true

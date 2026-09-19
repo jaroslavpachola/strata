@@ -17,7 +17,9 @@ mod transfer;
 pub use api::Api;
 pub use cipher::open_encrypted;
 pub use error::{Error, Result};
-pub use model::{Entry, Item, Kind, Locked, Partition, PropertyDef, TypeDef, Values, VaultStatus};
+pub use model::{
+    Entry, Item, Kind, Locked, Partition, PropertyDef, TypeDef, Values, VaultStatus, value_text,
+};
 pub use query::{Query, Sort};
 pub use seed::{Seeded, seed_types};
 pub use store::{Relation, Store};

@@ -5,10 +5,12 @@ members = [
     "crates/strata-cli",
     "crates/strata-server",
     "crates/strata-tui",
+    "crates/strata-egui",
+    "crates/strata-desktop",
 ]
 
 [workspace.package]
-version = "0.7.0"
+version = "0.8.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/jaroslavpachola/strata"
@@ -20,6 +22,7 @@ strip = true
 [workspace.dependencies]
 strata-core = { path = "crates/strata-core" }
 strata-server = { path = "crates/strata-server" }
+strata-egui = { path = "crates/strata-egui" }
 # SQLCipher compiled in, linked against the system libcrypto: the vault
 # is a SQLCipher file and open.db is plain SQLite through the same build
 rusqlite = { version = "0.40", features = ["bundled-sqlcipher"] }
@@ -46,4 +49,9 @@ futures-util = "0.3"
 age = "0.12"
 # the TUI, on the ratatui rcmd uses
 ratatui = "0.29"
+# the egui Plocha and rcmd-egui use: the widgets must fit Plocha's panes
+egui = "0.36"
+egui_extras = { version = "0.36", default-features = false }
+eframe = { version = "0.36", default-features = false, features = ["glow", "wayland", "x11", "default_fonts"] }
+egui_kittest = "0.36"
 tempfile = "3"

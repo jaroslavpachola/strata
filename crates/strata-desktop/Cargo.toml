@@ -1,0 +1,27 @@
+[package]
+name = "strata-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The strata browser in a window of its own, for before Plocha."
+
+[[bin]]
+name = "strata-desktop"
+path = "src/main.rs"
+
+[dependencies]
+strata-core.workspace = true
+strata-server.workspace = true
+strata-egui.workspace = true
+eframe.workspace = true
+egui.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+strata-tui.path = "../strata-tui"
+egui_kittest.workspace = true
+ratatui.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true

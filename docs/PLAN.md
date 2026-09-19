@@ -246,6 +246,18 @@ cascade stays with the CLI.
 
 *Gate: the desktop binary shows and edits the same data the TUI does.*
 
+*As built (0.8):* egui 0.36, Plocha's. Each view keeps its query's
+answer between frames and asks again only when invalidated, since a
+query per frame would be a socket round trip sixty times a second. The
+table sorts on a heading click and opens a row on a double click or
+Open; the form turns choices and booleans into drop-downs; the board
+groups by the first property with choices and moves a card by writing
+it. `StrataBrowser::state()` is a serializable `BrowserState` (type,
+view, query) for M9's panes. `strata-desktop` is its own crate, so a
+host of the widgets does not pull a second window stack. Tests use
+egui_kittest; the gate drives the browser and the TUI over one store
+directory and checks each shows the other's writes.
+
 ### M9 - A pane in Plocha
 
 - In `plocha-egui`, next to the rcmd pane: a `StrataPane` that draws one

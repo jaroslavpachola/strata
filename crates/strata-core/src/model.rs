@@ -92,6 +92,36 @@ impl Kind {
         })
     }
 
+    /// A value of this kind from what a person typed into a form field:
+    /// empty is "no value", a number or a boolean is read as one, JSON is
+    /// parsed; text, dates and refs are taken as typed, and checked when
+    /// written.
+    pub fn parse_text(self, input: &str) -> std::result::Result<Value, String> {
+        let text = input.trim();
+        if text.is_empty() {
+            return Ok(Value::Null);
+        }
+        Ok(match self {
+            Kind::Text | Kind::Date | Kind::Ref => Value::String(input.to_string()),
+            Kind::Number => {
+                if let Ok(n) = text.parse::<i64>() {
+                    n.into()
+                } else {
+                    let f: f64 = text.parse().map_err(|_| "not a number".to_string())?;
+                    serde_json::Number::from_f64(f)
+                        .map(Value::Number)
+                        .ok_or("not a finite number")?
+                }
+            }
+            Kind::Bool => match text {
+                "true" | "yes" | "y" | "1" => Value::Bool(true),
+                "false" | "no" | "n" | "0" => Value::Bool(false),
+                _ => return Err("true or false".into()),
+            },
+            Kind::Json => serde_json::from_str(text).map_err(|e| format!("not JSON: {e}"))?,
+        })
+    }
+
     /// What was expected, if `value` is not of this kind. Null is never
     /// checked here: it means "no value" and is handled by the caller.
     pub fn reject(self, value: &Value) -> Option<&'static str> {
@@ -272,6 +302,15 @@ impl Entry {
     }
 }
 
+/// A value as a person reads it: a string as itself, anything else as
+/// JSON. The inverse of [`Kind::parse_text`] for every kind.
+pub fn value_text(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
 /// Names the item's own fields take, kept off properties so a sort key
 /// or a column heading is never ambiguous.
 const RESERVED: &[&str] = &["id", "type", "created", "modified", "author", "modified_by"];
@@ -325,6 +364,25 @@ mod tests {
                 .is_none()
         );
         assert!(Kind::Ref.reject(&json!("nope")).is_some());
+    }
+
+    #[test]
+    fn typed_text_becomes_a_value_of_its_kind() {
+        assert_eq!(Kind::Number.parse_text("3").unwrap(), json!(3));
+        assert_eq!(Kind::Number.parse_text("2.5").unwrap(), json!(2.5));
+        assert!(Kind::Number.parse_text("lots").is_err());
+        assert_eq!(Kind::Bool.parse_text("yes").unwrap(), json!(true));
+        assert_eq!(Kind::Json.parse_text("[1]").unwrap(), json!([1]));
+        assert_eq!(Kind::Text.parse_text("  ").unwrap(), Value::Null);
+        for v in [json!("x"), json!(2.5), json!(true), json!({"a": [1]})] {
+            let kind = match &v {
+                Value::String(_) => Kind::Text,
+                Value::Number(_) => Kind::Number,
+                Value::Bool(_) => Kind::Bool,
+                _ => Kind::Json,
+            };
+            assert_eq!(kind.parse_text(&value_text(&v)).unwrap(), v);
+        }
     }
 
     #[test]

@@ -3,7 +3,9 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::Value;
-use strata_core::{Api, Entry, Kind, PropertyDef, Query, Sort, TypeDef, Uuid, Values, VaultStatus};
+use strata_core::{
+    Api, Entry, Kind, PropertyDef, Query, Sort, TypeDef, Uuid, Values, VaultStatus, value_text,
+};
 use strata_server::{Event, EventKind};
 
 use crate::keymap::{Action, Keymap};
@@ -375,7 +377,10 @@ impl App {
             if form.id.is_some() && !changed {
                 continue;
             }
-            let value = parse_input(field.prop.kind, &field.input)
+            let value = field
+                .prop
+                .kind
+                .parse_text(&field.input)
                 .map_err(|e| format!("{}: {e}", field.prop.name))?;
             values.insert(field.prop.name.clone(), value);
         }
@@ -453,33 +458,6 @@ fn edit_text(text: &mut String, key: KeyEvent) {
     }
 }
 
-/// A form field's text as a value of its kind; empty is "no value".
-pub fn parse_input(kind: Kind, input: &str) -> Result<Value, String> {
-    let text = input.trim();
-    if text.is_empty() {
-        return Ok(Value::Null);
-    }
-    Ok(match kind {
-        Kind::Text | Kind::Date | Kind::Ref => Value::String(input.to_string()),
-        Kind::Number => {
-            if let Ok(n) = text.parse::<i64>() {
-                n.into()
-            } else {
-                let f: f64 = text.parse().map_err(|_| "not a number".to_string())?;
-                serde_json::Number::from_f64(f)
-                    .map(Value::Number)
-                    .ok_or("not a finite number")?
-            }
-        }
-        Kind::Bool => match text {
-            "true" | "yes" | "y" | "1" => Value::Bool(true),
-            "false" | "no" | "n" | "0" => Value::Bool(false),
-            _ => return Err("true or false".into()),
-        },
-        Kind::Json => serde_json::from_str(text).map_err(|e| format!("not JSON: {e}"))?,
-    })
-}
-
 /// The filter line: `property=value` words filter in the store (the value
 /// is JSON if it parses, so `n=3` is a number; double quotes keep spaces);
 /// the other words must appear somewhere in a row.
@@ -524,12 +502,9 @@ fn split_quoted(text: &str) -> Vec<String> {
     out
 }
 
-/// A value as a table cell: a string as itself, anything else as JSON.
+/// A value as a table cell.
 pub fn cell(v: &Value) -> String {
-    match v {
-        Value::String(s) => s.clone(),
-        other => other.to_string(),
-    }
+    value_text(v)
 }
 
 /// An entry's cells, one per column.
@@ -559,7 +534,6 @@ pub fn row_cells(entry: &Entry, columns: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn the_filter_line_splits_into_equality_and_words() {
@@ -568,15 +542,5 @@ mod tests {
         assert_eq!(equal["n"], 3);
         assert_eq!(equal["title"], "two words");
         assert_eq!(words, ["misc"]);
-    }
-
-    #[test]
-    fn inputs_become_values_of_their_kind() {
-        assert_eq!(parse_input(Kind::Number, "3").unwrap(), json!(3));
-        assert_eq!(parse_input(Kind::Number, "2.5").unwrap(), json!(2.5));
-        assert!(parse_input(Kind::Number, "lots").is_err());
-        assert_eq!(parse_input(Kind::Bool, "yes").unwrap(), json!(true));
-        assert_eq!(parse_input(Kind::Json, "[1]").unwrap(), json!([1]));
-        assert_eq!(parse_input(Kind::Text, "  ").unwrap(), Value::Null);
     }
 }

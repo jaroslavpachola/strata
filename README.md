@@ -9,8 +9,8 @@ See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
 
 ## Status
 
-**M7 (0.7).** The core library, the `strata` CLI, `strata-server` and
-`strata-tui` work: types, items, relations and queries over two SQLite files,
+**M8 (0.8).** The core library, the `strata` CLI, `strata-server`,
+`strata-tui` and the egui widgets with `strata-desktop` work: types, items, relations and queries over two SQLite files,
 `open.db` in the clear and `vault.db` under SQLCipher. While the vault is
 locked its items show only as `{id, type, locked}` placeholders and every
 write to it is refused. `strata init` seeds a Task type (open) and a
@@ -46,6 +46,13 @@ Enter opens an item in a form, `n` adds one, `/` filters
 rebind under `[keys]` in the config (`"x" = "quit"`), colours with
 `theme = "mc" | "dark" | "bw"`.
 
+### The desktop
+
+    strata-desktop                       # the egui browser in a window
+
+A type picker, a table or a kanban board, a form per item, and the
+vault's lock; `strata-egui` is the same widgets for a host such as Plocha.
+
 ### Export
 
     strata -u export                     # SuperHub/References/strata by default, or --out DIR
@@ -80,4 +87,5 @@ in: see the script's header for the contract.
     crates/strata-cli      one-shot commands, JSON in and out
     crates/strata-server   a Unix socket for long-lived clients, and its client
     crates/strata-tui      ratatui browser and editor
-    crates/strata-egui     egui widgets, standalone and as a Plocha pane (M8, M9)
+    crates/strata-egui     egui widgets: table, form, kanban, and a browser of them
+    crates/strata-desktop  the browser in a window of its own
