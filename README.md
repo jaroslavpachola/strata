@@ -58,10 +58,11 @@ vault's lock; `strata-egui` is the same widgets for a host such as Plocha.
 ### SuperHub and LLMs
 
     strata links                         # items naming notes, notes linking strata://item/<id>
-    claude mcp add strata -- strata mcp  # the store as MCP tools, read-only
+    claude mcp add strata -- strata mcp  # the store as MCP tools
 
-`strata mcp` never shows a vault value, locked or not: vault items come
-back as placeholders. `strata links` reads the notes from a SuperHub
+`strata mcp` reads and writes open-partition items but never shows or
+touches a vault value: vault items come back as placeholders and writes
+to vault types are refused. `strata links` reads the notes from a SuperHub
 vault on disk (`superhub_vault`, `--vault`) or from the hub at
 `$SUPERHUB_URL` with `$SUPERHUB_API_KEY`.
 

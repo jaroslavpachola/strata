@@ -913,7 +913,19 @@ fn mcp_shows_open_items_and_never_a_vault_value() {
         .iter()
         .map(|t| t["name"].as_str().unwrap().to_string())
         .collect();
-    assert_eq!(names, ["strata_types", "strata_query", "strata_item"]);
+    assert_eq!(
+        names,
+        [
+            "strata_types",
+            "strata_query",
+            "strata_item",
+            "strata_item_add",
+            "strata_item_update",
+            "strata_item_delete",
+            "strata_relate",
+            "strata_unrelate",
+        ]
+    );
 
     let (err, text) = mcp.call(
         4,
@@ -948,6 +960,130 @@ fn mcp_shows_open_items_and_never_a_vault_value() {
     assert!(err);
     let unknown = mcp.ask(json!({"jsonrpc": "2.0", "id": 9, "method": "resources/list"}));
     assert_eq!(unknown["error"]["code"], -32601);
+
+    drop(mcp);
+    assert!(child.wait().unwrap().success());
+}
+
+/// MCP write tools: add, update, delete items and create/remove relations.
+#[test]
+fn mcp_writes_open_items_and_refuses_vault() {
+    use std::io::{BufRead, BufReader, Write};
+    let env = Env::new();
+    let mut child = Command::new(BIN)
+        .args(["mcp"])
+        .env("STRATA_DIR", env.dir.path().join("store"))
+        .env("STRATA_CONFIG", "/dev/null")
+        .env_remove("STRATA_VAULT_PASSPHRASE")
+        .env_remove("STRATA_SOCKET")
+        .env("XDG_RUNTIME_DIR", env.dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    struct Session {
+        stdin: std::process::ChildStdin,
+        stdout: BufReader<std::process::ChildStdout>,
+        next_id: i64,
+    }
+    impl Session {
+        fn call(&mut self, name: &str, args: Value) -> (bool, Value) {
+            self.next_id += 1;
+            let msg = json!({"jsonrpc": "2.0", "id": self.next_id, "method": "tools/call",
+                             "params": {"name": name, "arguments": args}});
+            writeln!(self.stdin, "{msg}").unwrap();
+            let mut line = String::new();
+            self.stdout.read_line(&mut line).unwrap();
+            let reply: Value = serde_json::from_str(&line).unwrap();
+            let result = &reply["result"];
+            let is_err = result["isError"].as_bool().unwrap();
+            let text = result["content"][0]["text"].as_str().unwrap();
+            (is_err, serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.to_string())))
+        }
+    }
+    let mut mcp = Session {
+        stdin: child.stdin.take().unwrap(),
+        stdout: BufReader::new(child.stdout.take().unwrap()),
+        next_id: 0,
+    };
+    // initialize
+    let msg = json!({"jsonrpc": "2.0", "id": 0, "method": "initialize",
+                     "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                                "clientInfo": {"name": "test", "version": "0"}}});
+    writeln!(mcp.stdin, "{msg}").unwrap();
+    let mut line = String::new();
+    mcp.stdout.read_line(&mut line).unwrap();
+
+    // add an item
+    let (err, item) = mcp.call(
+        "strata_item_add",
+        json!({"type": "Task", "values": {"title": "from mcp", "status": "todo"}}),
+    );
+    assert!(!err, "{item}");
+    assert_eq!(item["values"]["title"], "from mcp");
+    assert_eq!(item["author"], "claude");
+    let id = item["id"].as_str().unwrap().to_string();
+
+    // add with explicit author
+    let (err, item2) = mcp.call(
+        "strata_item_add",
+        json!({"type": "Task", "values": {"title": "by gemini", "status": "todo"}, "author": "gemini"}),
+    );
+    assert!(!err, "{item2}");
+    assert_eq!(item2["author"], "gemini");
+
+    // update
+    let (err, updated) = mcp.call(
+        "strata_item_update",
+        json!({"id": &id, "values": {"status": "done"}}),
+    );
+    assert!(!err, "{updated}");
+    assert_eq!(updated["values"]["status"], "done");
+    assert_eq!(updated["values"]["title"], "from mcp");
+    assert_eq!(updated["modified_by"], "claude");
+
+    // query sees it
+    let (err, items) = mcp.call(
+        "strata_query",
+        json!({"type": "Task", "filter": {"status": "done"}}),
+    );
+    assert!(!err);
+    assert_eq!(items.as_array().unwrap().len(), 1);
+    assert_eq!(items[0]["id"], id);
+
+    // relate and unrelate
+    let id2 = item2["id"].as_str().unwrap();
+    let (err, rels) = mcp.call(
+        "strata_relate",
+        json!({"source": &id, "target": id2, "kind": "blocks"}),
+    );
+    assert!(!err, "{rels}");
+    assert_eq!(rels.as_array().unwrap().len(), 1);
+    assert_eq!(rels[0]["kind"], "blocks");
+
+    let (err, rels) = mcp.call(
+        "strata_unrelate",
+        json!({"source": &id, "target": id2, "kind": "blocks"}),
+    );
+    assert!(!err, "{rels}");
+    assert!(rels.as_array().unwrap().is_empty());
+
+    // delete
+    let (err, deleted) = mcp.call("strata_item_delete", json!({"id": &id}));
+    assert!(!err, "{deleted}");
+    assert_eq!(deleted["deleted"], id);
+
+    // gone
+    let (err, _) = mcp.call("strata_item", json!({"id": &id}));
+    assert!(err);
+
+    // vault writes are refused
+    let (err, msg) = mcp.call(
+        "strata_item_add",
+        json!({"type": "PortfolioSnapshot", "values": {"taken_at": "2026-09-21", "currency": "EUR", "total": 1, "positions": []}}),
+    );
+    assert!(err);
+    assert!(msg.as_str().unwrap().contains("vault"), "{msg}");
 
     drop(mcp);
     assert!(child.wait().unwrap().success());

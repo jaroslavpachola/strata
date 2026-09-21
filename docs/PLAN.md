@@ -285,10 +285,13 @@ canvas, and closing and reopening Plocha brings them back.*
 *As built (0.9, before M9, which waits on Plocha):* strata ships its own
 MCP server, `strata mcp` on stdio, rather than adding tools to
 SuperHub's: SuperHub's is a proxy to a remote hub, strata's data is
-local. It is read-only (`strata_types`, `strata_query`, `strata_item`)
-and blind to the vault even unlocked: vault items come back as
-placeholders, and a filter or value sort on a vault type is refused,
-since which items match would itself say something. `strata links`
+local. It reads and writes open-partition items (`strata_types`,
+`strata_query`, `strata_item`, `strata_item_add`, `strata_item_update`,
+`strata_item_delete`, `strata_relate`, `strata_unrelate`) and is blind
+to the vault even unlocked: vault items come back as placeholders,
+writes to vault types are refused, and a filter or value sort on a vault
+type is refused, since which items match would itself say something.
+The author on a write defaults to `claude`. `strata links`
 reads items' `note` paths from the store and `strata://item/<id>` links
 from the notes, on disk (`--vault`, `superhub_vault`) or through the
 hub's regex search (`$SUPERHUB_URL`, `$SUPERHUB_API_KEY`). The

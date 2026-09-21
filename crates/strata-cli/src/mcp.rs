@@ -1,10 +1,11 @@
-//! `strata mcp`: the store as an MCP server on stdio, for an LLM to read.
+//! `strata mcp`: the store as an MCP server on stdio, for an LLM to
+//! read and write.
 //!
-//! Read-only, and blind to the vault whether it is locked or not: a vault
-//! type's items come back as `{id, type, locked}` placeholders, and a
-//! filter or a sort over a vault type's values is refused, since which
-//! items match would say something about them. What the LLM needs from
-//! the vault goes through a script it writes and never sees the output of.
+//! Blind to the vault whether it is locked or not: a vault type's items
+//! come back as `{id, type, locked}` placeholders, and writes to a vault
+//! type are refused, since the LLM should never see or set vault values.
+//! What it needs from the vault goes through a script it writes and never
+//! sees the output of.
 //!
 //! JSON-RPC 2.0, one message per line: `initialize`, `ping`, `tools/list`
 //! and `tools/call`; notifications are read and not answered.
@@ -16,9 +17,9 @@ use strata_core::{Api, Entry, Locked, Partition, Query, Sort, Uuid};
 
 const INSTRUCTIONS: &str = "strata is the user's local store of structured data: typed items \
 (tasks, and whatever types they declare) with properties. Start with strata_types to see \
-what exists, then strata_query for one type's items. Read-only. Types in the vault partition \
-show their items only as {id, type, locked} placeholders, whether or not the vault is \
-unlocked; that is deliberate, not an error to work around.";
+what exists, then strata_query for one type's items. Writes go through strata_item_add, \
+strata_item_update and strata_item_delete; only open-partition types accept writes — vault \
+types are read-only placeholders, whether or not the vault is unlocked.";
 
 pub fn serve(store: &dyn Api) -> anyhow::Result<()> {
     let stdin = std::io::stdin();
@@ -105,6 +106,72 @@ fn tools() -> Value {
                 "required": ["id"],
             },
         },
+        {
+            "name": "strata_item_add",
+            "description": "Create an item of the given open-partition type. Returns the \
+                new item with its id. Vault types are refused.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string", "description": "The type's name, e.g. Task"},
+                    "values": {"type": "object", "description": "Property values, e.g. {\"title\": \"buy milk\", \"status\": \"todo\"}"},
+                    "author": {"type": "string", "description": "Who is creating it; defaults to claude"},
+                },
+                "required": ["type", "values"],
+            },
+        },
+        {
+            "name": "strata_item_update",
+            "description": "Update an item by id. values is a patch: present keys are set, \
+                null removes a value. Returns the updated item. Vault items are refused.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "The item's UUID"},
+                    "values": {"type": "object", "description": "Patch: {\"status\": \"done\"} sets status, {\"note\": null} removes note"},
+                    "author": {"type": "string", "description": "Who is writing; defaults to claude"},
+                },
+                "required": ["id", "values"],
+            },
+        },
+        {
+            "name": "strata_item_delete",
+            "description": "Delete an item by id. Vault items are refused.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "The item's UUID"},
+                },
+                "required": ["id"],
+            },
+        },
+        {
+            "name": "strata_relate",
+            "description": "Create a named relation between two items, e.g. blocks, parent, \
+                see_also. Idempotent.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "description": "Source item UUID"},
+                    "target": {"type": "string", "description": "Target item UUID"},
+                    "kind": {"type": "string", "description": "Relation kind, e.g. blocks"},
+                },
+                "required": ["source", "target", "kind"],
+            },
+        },
+        {
+            "name": "strata_unrelate",
+            "description": "Remove a relation between two items.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "description": "Source item UUID"},
+                    "target": {"type": "string", "description": "Target item UUID"},
+                    "kind": {"type": "string", "description": "Relation kind, e.g. blocks"},
+                },
+                "required": ["source", "target", "kind"],
+            },
+        },
     ])
 }
 
@@ -155,10 +222,7 @@ fn tool(store: &dyn Api, name: &str, args: &Value) -> Result<Value, String> {
             ))
         }
         "strata_item" => {
-            let id: Uuid = args["id"]
-                .as_str()
-                .and_then(|s| Uuid::parse_str(s.trim_start_matches(crate::links::SCHEME)).ok())
-                .ok_or("id: expected a UUID")?;
+            let id = parse_id(args)?;
             let entry = store.get(id).map_err(err)?;
             let vault = store
                 .get_type(entry.type_name())
@@ -166,8 +230,96 @@ fn tool(store: &dyn Api, name: &str, args: &Value) -> Result<Value, String> {
                 .map_err(err)?;
             Ok(json!(blind(entry, vault)))
         }
+        "strata_item_add" => {
+            let type_name = args["type"].as_str().ok_or("type is required")?;
+            refuse_vault(store, type_name)?;
+            let values = args["values"]
+                .as_object()
+                .ok_or("values is required")?
+                .clone();
+            let author = author(args);
+            Ok(json!(store.add_item(type_name, values, &author).map_err(err)?))
+        }
+        "strata_item_update" => {
+            let id = parse_id(args)?;
+            refuse_vault_item(store, id)?;
+            let values = args["values"]
+                .as_object()
+                .ok_or("values is required")?
+                .clone();
+            let author = author(args);
+            Ok(json!(store.update_item(id, values, &author).map_err(err)?))
+        }
+        "strata_item_delete" => {
+            let id = parse_id(args)?;
+            refuse_vault_item(store, id)?;
+            store.delete_item(id).map_err(err)?;
+            Ok(json!({"deleted": id.to_string()}))
+        }
+        "strata_relate" => {
+            let source = parse_uuid(args, "source")?;
+            let target = parse_uuid(args, "target")?;
+            let kind = args["kind"].as_str().ok_or("kind is required")?;
+            store.relate(source, target, kind).map_err(err)?;
+            Ok(json!(store.relations(source).map_err(err)?))
+        }
+        "strata_unrelate" => {
+            let source = parse_uuid(args, "source")?;
+            let target = parse_uuid(args, "target")?;
+            let kind = args["kind"].as_str().ok_or("kind is required")?;
+            store.unrelate(source, target, kind).map_err(err)?;
+            Ok(json!(store.relations(source).map_err(err)?))
+        }
         _ => Err(format!("no tool {name:?}")),
     }
+}
+
+fn parse_id(args: &Value) -> Result<Uuid, String> {
+    args["id"]
+        .as_str()
+        .and_then(|s| Uuid::parse_str(s.trim_start_matches(crate::links::SCHEME)).ok())
+        .ok_or_else(|| "id: expected a UUID".to_string())
+}
+
+fn parse_uuid(args: &Value, field: &str) -> Result<Uuid, String> {
+    args[field]
+        .as_str()
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .ok_or_else(|| format!("{field}: expected a UUID"))
+}
+
+fn author(args: &Value) -> String {
+    args["author"]
+        .as_str()
+        .filter(|a| !a.is_empty())
+        .unwrap_or("claude")
+        .to_string()
+}
+
+fn refuse_vault(store: &dyn Api, type_name: &str) -> Result<(), String> {
+    let def = store
+        .get_type(type_name)
+        .map_err(|e| e.to_string())?;
+    if def.partition == Partition::Vault {
+        return Err(format!(
+            "{type_name} is in the vault: MCP cannot write to vault types"
+        ));
+    }
+    Ok(())
+}
+
+fn refuse_vault_item(store: &dyn Api, id: Uuid) -> Result<(), String> {
+    let entry = store.get(id).map_err(|e| e.to_string())?;
+    let def = store
+        .get_type(entry.type_name())
+        .map_err(|e| e.to_string())?;
+    if def.partition == Partition::Vault {
+        return Err(format!(
+            "{} is in the vault: MCP cannot write to vault items",
+            entry.type_name()
+        ));
+    }
+    Ok(())
 }
 
 /// A vault item as its placeholder, whatever the vault's state.
