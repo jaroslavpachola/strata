@@ -271,6 +271,20 @@ directory and checks each shows the other's writes.
 *Gate: two panes, a Task table and a PortfolioSnapshot form, live on the
 canvas, and closing and reopening Plocha brings them back.*
 
+*As built (0.10):* the pane is `StrataPane` in `plocha-egui/src/strata.rs`,
+a whole `StrataBrowser` rather than one bare view, so a pane can change
+its type and view in place; "a form" became a fourth view, `Form`, a
+new-item form that stays up after a save. Plocha takes strata-egui from
+git, pinned to a rev, until the crates are published. One store for
+every pane: the server's client when a server holds the directory, whose
+events invalidate every pane, or the files, where a click or Enter in a
+pane is taken as a write. A `Pane` item is `{state, rect}`, `state` the
+`BrowserState` and `rect` `[x, y, w, h]` in canvas units; it is written
+when the pane settles (not mid-drag) and on shutdown, and deleted only
+when the pane is closed by hand. Plocha grew two `Pane` hooks for it,
+`placed` and `discard`. Plocha with no strata store opens without
+strata panes, and does not make one.
+
 ### M10 - The SuperHub bridge
 
 - A note links to an item as `strata://item/<uuid>`; an item's `note`

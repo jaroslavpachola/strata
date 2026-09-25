@@ -109,8 +109,8 @@ enum Command {
         #[arg(long)]
         vault: Option<PathBuf>,
     },
-    /// Serve the store to an LLM over MCP on stdio: read-only, and vault
-    /// items only as placeholders, locked or not
+    /// Serve the store to an LLM over MCP on stdio: open items to read
+    /// and write, vault items only as placeholders, locked or not
     Mcp,
     /// Print changes as strata-server sees them, one per line, until it
     /// stops: items, type, or vault, and the type concerned

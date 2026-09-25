@@ -9,7 +9,7 @@ See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
 
 ## Status
 
-**0.9: M0-M8 and M10** (M9, the Plocha pane, is next). The core
+**0.10: M0-M10.** The core
 library, the `strata` CLI, `strata-server`, `strata-tui` and the egui
 widgets with `strata-desktop` work: types,
 items, relations and queries over two SQLite files, `open.db` in the
@@ -52,8 +52,10 @@ rebind under `[keys]` in the config (`"x" = "quit"`), colours with
 
     strata-desktop                       # the egui browser in a window
 
-A type picker, a table or a kanban board, a form per item, and the
-vault's lock; `strata-egui` is the same widgets for a host such as Plocha.
+A type picker, a table, a kanban board or a standing entry form, a form
+per item, and the vault's lock; `strata-egui` is the same widgets for a
+host. Plocha is one: its strata panes share one store, and each is kept
+as a `Pane` item, so the layout comes back next session.
 
 ### SuperHub and LLMs
 
