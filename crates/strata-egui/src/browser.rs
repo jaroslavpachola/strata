@@ -1,5 +1,6 @@
-//! The views together: a type picker beside a table or a board, a form
-//! over them for one item, and the vault's lock.
+//! The views together: a type picker beside a table, a board or a
+//! standing entry form, a form over them for one item, and the vault's
+//! lock.
 
 use egui::{TextEdit, Ui};
 use serde::{Deserialize, Serialize};
@@ -13,6 +14,9 @@ pub enum ViewKind {
     #[default]
     Table,
     Kanban,
+    /// A form for a new item of the type, which stays up after a save:
+    /// the view for logging one snapshot after another.
+    Form,
 }
 
 /// What a browser shows, as data: enough to bring it back as it was.
@@ -36,6 +40,9 @@ pub struct StrataBrowser {
     table: Option<TableView>,
     kanban: Option<KanbanView>,
     form: Option<FormView>,
+    /// The Form view's own form, apart from `form`, which is an item
+    /// opened from the table or the board.
+    entry: Option<FormView>,
     passphrase: String,
     message: Option<(String, bool)>,
 }
@@ -51,6 +58,7 @@ impl StrataBrowser {
             table: None,
             kanban: None,
             form: None,
+            entry: None,
             passphrase: String::new(),
             message: None,
         }
@@ -94,6 +102,7 @@ impl StrataBrowser {
         self.kanban = Some(KanbanView::new(Query::new(&name)));
         self.current = Some(name);
         self.form = None;
+        self.entry = None;
     }
 
     pub fn show(&mut self, ui: &mut Ui, store: &mut dyn Api) {
@@ -193,6 +202,10 @@ impl StrataBrowser {
                     .as_mut()
                     .and_then(|k| k.show(ui, store_ref, &self.author))
                     .map(|id| FormView::edit(store_ref, id)),
+                ViewKind::Form => {
+                    self.show_entry(ui, store_ref);
+                    None
+                }
             };
             match opened {
                 Some(Ok(form)) => self.form = Some(form),
@@ -200,6 +213,35 @@ impl StrataBrowser {
                 None => {}
             }
         });
+    }
+
+    fn show_entry(&mut self, ui: &mut Ui, store: &dyn Api) {
+        let Some(name) = &self.current else {
+            return;
+        };
+        if self.entry.is_none() {
+            match FormView::new(store, name) {
+                Ok(form) => self.entry = Some(form),
+                Err(e) => {
+                    ui.colored_label(ui.visuals().error_fg_color, e.to_string());
+                    return;
+                }
+            }
+        }
+        let Some(entry) = &mut self.entry else {
+            return;
+        };
+        match entry.show(ui, store, &self.author) {
+            FormOutcome::Editing => {}
+            FormOutcome::Saved(_) => {
+                self.message = Some(("saved".into(), false));
+                // a fresh form for the next one
+                self.entry = None;
+                self.refresh_views();
+            }
+            // Cancel on a form that stays up means start over
+            FormOutcome::Cancelled => self.entry = None,
+        }
     }
 
     fn refresh_views(&mut self) {
@@ -215,6 +257,7 @@ impl StrataBrowser {
         ui.horizontal(|ui| {
             ui.selectable_value(&mut self.view, ViewKind::Table, "Table");
             ui.selectable_value(&mut self.view, ViewKind::Kanban, "Kanban");
+            ui.selectable_value(&mut self.view, ViewKind::Form, "Form");
             ui.separator();
             match vault {
                 VaultStatus::Absent => {

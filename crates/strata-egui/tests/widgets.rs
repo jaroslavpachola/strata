@@ -200,3 +200,39 @@ fn the_browser_comes_back_from_its_state() {
     h.run();
     assert!(h.query_by_label("todo (2)").is_some());
 }
+
+#[test]
+fn the_form_view_logs_one_snapshot_after_another() {
+    let (dir, mut h) = setup();
+    let state = BrowserState {
+        type_name: Some("PortfolioSnapshot".into()),
+        view: ViewKind::Form,
+        query: None,
+    };
+    h.state_mut().browser = StrataBrowser::from_state("egui", &state);
+    h.run();
+    type_into(&mut h, "vault locked, passphrase:", PASS);
+    click(&mut h, "Unlock");
+    assert!(h.query_by_label("PortfolioSnapshot: new").is_some());
+
+    for (day, total) in [("2026-09-20", "100"), ("2026-09-21", "101.5")] {
+        type_into(&mut h, "taken_at *", day);
+        type_into(&mut h, "currency *", "EUR");
+        type_into(&mut h, "total *", total);
+        type_into(&mut h, "positions *", "[]");
+        click(&mut h, "Save");
+        assert!(h.query_by_label("saved").is_some());
+        // the form stays, emptied for the next one
+        assert!(h.query_by_label("PortfolioSnapshot: new").is_some());
+    }
+    let totals: Vec<_> = outside(dir.path())
+        .query(&Query::new("PortfolioSnapshot").sort_by("taken_at"))
+        .unwrap()
+        .iter()
+        .map(|e| e.item().unwrap().values["total"].clone())
+        .collect();
+    // the seeded one, then the two logged here: the form was emptied
+    // between them, or the second date would have been refused
+    assert_eq!(totals, [json!(42.5), json!(100), json!(101.5)]);
+    assert_eq!(h.state().browser.state().view, ViewKind::Form);
+}
