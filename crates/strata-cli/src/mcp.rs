@@ -238,7 +238,9 @@ fn tool(store: &dyn Api, name: &str, args: &Value) -> Result<Value, String> {
                 .ok_or("values is required")?
                 .clone();
             let author = author(args);
-            Ok(json!(store.add_item(type_name, values, &author).map_err(err)?))
+            Ok(json!(
+                store.add_item(type_name, values, &author).map_err(err)?
+            ))
         }
         "strata_item_update" => {
             let id = parse_id(args)?;
@@ -297,9 +299,7 @@ fn author(args: &Value) -> String {
 }
 
 fn refuse_vault(store: &dyn Api, type_name: &str) -> Result<(), String> {
-    let def = store
-        .get_type(type_name)
-        .map_err(|e| e.to_string())?;
+    let def = store.get_type(type_name).map_err(|e| e.to_string())?;
     if def.partition == Partition::Vault {
         return Err(format!(
             "{type_name} is in the vault: MCP cannot write to vault types"

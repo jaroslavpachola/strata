@@ -998,7 +998,10 @@ fn mcp_writes_open_items_and_refuses_vault() {
             let result = &reply["result"];
             let is_err = result["isError"].as_bool().unwrap();
             let text = result["content"][0]["text"].as_str().unwrap();
-            (is_err, serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.to_string())))
+            (
+                is_err,
+                serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.to_string())),
+            )
         }
     }
     let mut mcp = Session {
